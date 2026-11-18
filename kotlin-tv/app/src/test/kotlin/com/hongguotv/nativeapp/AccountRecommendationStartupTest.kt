@@ -71,9 +71,9 @@ class AccountRecommendationStartupTest {
             assertNotNull(scrollParent(resumeCard))
             assertSame("Resume and popular shelves scroll together", scrollParent(resumeCard), scrollParent(hotCard))
 
-            assertTrue(texts(decor).contains("接着上次的故事"))
-            val independentResume = home.findViewWithTag<View>("home:spotlight:play")
+            val independentResume = home.findViewWithTag<TextView>("home:spotlight:play")
             assertNotNull(independentResume)
+            assertEquals("▶ 继续观看", independentResume.text.toString())
             assertSame("Independent resume section must scroll with the shelves", scrollParent(hotCard), scrollParent(independentResume))
             assertTrue(independentResume.hasFocus())
             assertTrue(texts(decor).contains("随心看"))

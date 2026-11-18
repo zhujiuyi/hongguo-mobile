@@ -21,6 +21,7 @@ internal class TvSearchPanel(
     history: List<String>,
     private val upper: View,
     fetch: (String) -> List<String>,
+    private val shell: CatalogShell? = null,
     private val search: (String) -> Unit,
 ) : LinearLayout(context) {
     data class EditState(val draft: String, val words: List<String>, val word: Int, val recent: Int)
@@ -52,14 +53,11 @@ internal class TvSearchPanel(
         maxLines = 2
         ellipsize = TextUtils.TruncateAt.END
     }
-    private val backButton = action("修改搜索") {
-        if (back()) {
-            input.requestFocus()
-            input.post {
-                if (input.isShown && input.hasFocus()) keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
-            }
+    private val backButton = if (shell == null) {
+        BackIconButton(context, label = "返回搜索编辑").apply {
+            setOnClickListener { editFromResults() }
         }
-    }
+    } else null
     private val recents = mutableListOf<TextView>()
     private val historyGroup = LinearLayout(context).apply { orientation = VERTICAL }
     private var editingFocus: View? = null
@@ -108,7 +106,7 @@ internal class TvSearchPanel(
         }
 
         val resultHeader = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        resultHeader.addView(backButton, LayoutParams(-2, -2).apply { marginEnd = dp(12) })
+        backButton?.let { resultHeader.addView(it, LayoutParams(-2, -2).apply { marginEnd = dp(12) }) }
         resultHeader.addView(resultHeading, LayoutParams(0, -2, 1f))
         resultStage.addView(resultHeader, LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         resultStage.addView(results, LayoutParams(-1, 0, 1f))
@@ -149,7 +147,18 @@ internal class TvSearchPanel(
         showingResults = true
         editor.visibility = GONE
         resultStage.visibility = VISIBLE
-        if (!isInTouchMode) backButton.requestFocus()
+        shell?.setBackAction(::editFromResults)
+        shell?.backEntry?.contentDescription = "返回搜索编辑"
+        updateNavigation()
+        if (!isInTouchMode) resultBackEntry().requestFocus()
+    }
+
+    private fun editFromResults() {
+        if (!back()) return
+        input.requestFocus()
+        input.post {
+            if (input.isShown && input.hasFocus()) keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     fun back(): Boolean {
@@ -157,6 +166,7 @@ internal class TvSearchPanel(
         showingResults = false
         resultStage.visibility = GONE
         editor.visibility = VISIBLE
+        shell?.setBackAction(null)
         if (!isInTouchMode && editingFocus?.requestFocus() != true) input.requestFocus()
         updateNavigation()
         return true
@@ -164,11 +174,11 @@ internal class TvSearchPanel(
 
     fun resultTitle(query: String) { resultHeading.text = query }
 
-    fun resultBackEntry(): View = backButton
+    fun resultBackEntry(): View = shell?.backEntry ?: backButton ?: upper
 
     fun middleEntry(): View? = suggestions.entry() ?: recents.firstOrNull()?.takeIf { input.text.isBlank() }
 
-    fun entry(): View = if (showingResults) backButton else input
+    fun entry(): View = if (showingResults) resultBackEntry() else input
 
     fun updateNavigation() {
         historyGroup.visibility = if (recents.isNotEmpty() && input.text.isBlank()) VISIBLE else GONE
@@ -179,7 +189,7 @@ internal class TvSearchPanel(
         input.nextFocusRightId = searchButton.id
         searchButton.nextFocusLeftId = input.id
         searchButton.nextFocusDownId = choices
-        backButton.nextFocusDownId = resultEntry()?.id ?: upper.id
+        if (showingResults) resultBackEntry().nextFocusDownId = resultEntry()?.id ?: upper.id
         recents.forEachIndexed { index, view ->
             view.nextFocusUpId = recents.getOrNull(index - 1)?.id ?: input.id
             view.nextFocusDownId = recents.getOrNull(index + 1)?.id ?: upper.id

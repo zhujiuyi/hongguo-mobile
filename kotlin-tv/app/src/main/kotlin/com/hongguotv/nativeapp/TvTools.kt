@@ -31,6 +31,25 @@ internal fun Context.dialogWidth(maxWidthDp: Int): Int {
     return minOf((maxWidthDp * metrics.density).toInt(), (width - (32 * metrics.density).toInt()).coerceAtLeast(1))
 }
 
+internal fun dialogBackHeader(context: Context, title: String, back: View, tint: Int = TvStyle.text) =
+    LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(back, LinearLayout.LayoutParams(-2, -2))
+        addView(
+            TextView(context).apply {
+                text = title
+                textSize = 21f
+                setTextColor(tint)
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+            },
+            LinearLayout.LayoutParams(0, -2, 1f).apply {
+                marginStart = (8 * resources.displayMetrics.density).toInt()
+            },
+        )
+    }
+
 internal fun AlertDialog.stylePanel() {
     findViewById<TextView>(android.R.id.message)?.setTextColor(TvStyle.text)
     val titleId = context.resources.getIdentifier("alertTitle", "id", "android")
@@ -153,11 +172,23 @@ class TvTools(private val activity: Activity) {
             setPadding(dp(20), dp(18), dp(20), dp(14))
             background = TvVisual.panel(activity, modal = true)
         }
-        content.addView(label(title, 21f).apply {
-            setTextColor(TvStyle.text)
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(dp(8), 0, dp(8), dp(14))
-        })
+        lateinit var next: AlertDialog
+        val back = onBack?.let {
+            BackIconButton(activity).apply {
+                setOnClickListener { if (next.isShowing) next.cancel() }
+            }
+        }
+        if (back == null) {
+            content.addView(label(title, 21f).apply {
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(dp(8), 0, dp(8), dp(14))
+            })
+        } else {
+            content.addView(
+                dialogBackHeader(activity, title, back),
+                LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) },
+            )
+        }
         val scroll = ScrollView(activity).apply {
             isVerticalScrollBarEnabled = false
             isFillViewport = false
@@ -166,18 +197,16 @@ class TvTools(private val activity: Activity) {
         scroll.addView(list)
         content.addView(scroll)
         val choices = mutableListOf<View>()
-        lateinit var next: AlertDialog
-        val cancel = Button(activity).apply {
-            id = View.generateViewId()
-            text = if (onBack == null) "关闭" else "返回"
-            setTextColor(TvStyle.text)
-            backgroundTintList = ColorStateList.valueOf(TvStyle.raised)
-            minHeight = dp(48)
-            setOnClickListener {
-                next.dismiss()
-                if (onBack != null) main.post { onBack() }
+        val close = if (back == null) {
+            Button(activity).apply {
+                id = View.generateViewId()
+                text = "关闭"
+                setTextColor(TvStyle.text)
+                backgroundTintList = ColorStateList.valueOf(TvStyle.raised)
+                minHeight = dp(48)
+                setOnClickListener { next.dismiss() }
             }
-        }
+        } else null
         fun choice(value: String, checked: Boolean, action: () -> Unit) {
             val row = LinearLayout(activity).apply {
                 id = View.generateViewId()
@@ -219,13 +248,16 @@ class TvTools(private val activity: Activity) {
         labels.forEachIndexed { index, value -> choice(value, index == selected) { onChoice(index) } }
         if (extra != null) choice(extra, false, onExtra)
         choices.forEachIndexed { index, view ->
-            view.nextFocusUpId = choices[maxOf(0, index - 1)].id
-            view.nextFocusDownId = choices.getOrNull(index + 1)?.id ?: cancel.id
+            view.nextFocusUpId = choices.getOrNull(index - 1)?.id ?: back?.id ?: view.id
+            view.nextFocusDownId = choices.getOrNull(index + 1)?.id ?: close?.id ?: view.id
             view.nextFocusLeftId = view.id
             view.nextFocusRightId = view.id
         }
-        cancel.nextFocusUpId = choices.last().id
-        content.addView(cancel, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END })
+        back?.nextFocusDownId = choices.first().id
+        close?.let {
+            it.nextFocusUpId = choices.last().id
+            content.addView(it, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END })
+        }
         next = AlertDialog.Builder(activity).create()
         next.setView(content, 0, 0, 0, 0)
         if (onBack != null) next.setOnCancelListener { main.post { onBack() } }
@@ -255,6 +287,9 @@ class TvTools(private val activity: Activity) {
         val scroll = ScrollView(activity).apply { addView(list) }
         val choices = mutableListOf<TextView>()
         lateinit var next: AlertDialog
+        val back = BackIconButton(activity).apply {
+            setOnClickListener { next.cancel() }
+        }
         labels.chunked(columns).forEachIndexed { rowIndex, values ->
             val row = LinearLayout(activity).apply { isBaselineAligned = false }
             values.forEachIndexed { col, value ->
@@ -302,16 +337,18 @@ class TvTools(private val activity: Activity) {
             v.nextFocusLeftId = if (i % columns == 0) v.id else choices[i - 1].id
             v.nextFocusRightId =
                 if (i % columns == columns - 1 || i == choices.lastIndex) v.id else choices[i + 1].id
-            v.nextFocusUpId = choices.getOrNull(i - columns)?.id ?: v.id
+            v.nextFocusUpId = choices.getOrNull(i - columns)?.id ?: back.id
             v.nextFocusDownId =
                 choices.getOrNull(i + columns)?.id
                     ?: if (i / columns < choices.lastIndex / columns) choices.last().id else View.NO_ID
         }
+        back.nextFocusDownId = choices.firstOrNull()?.id ?: View.NO_ID
         next =
             AlertDialog.Builder(activity)
-                .setTitle(title)
+                .setCustomTitle(dialogBackHeader(activity, title, back).apply {
+                    setPadding(dp(12), dp(8), dp(16), 0)
+                })
                 .setView(scroll)
-                .setNegativeButton("返回", null)
                 .create()
         open(next, anchor)
         next.window?.setLayout(width, -2)

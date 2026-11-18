@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Point
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
@@ -375,6 +377,8 @@ class MainActivity : Activity() {
     private var playbackClock: TextClock? = null
     private var playbackSpeedMenu: PlaybackSpeedMenu? = null
     private var fullscreenButton: PlaybackIconButton? = null
+    private var portraitFullscreenButton: TextView? = null
+    private var playbackVideoFrame: View? = null
     private var landscapePlayback: Boolean? = null
     private var transportPlay: TextView? = null
     private var sleepButton: TextView? = null
@@ -659,6 +663,7 @@ class MainActivity : Activity() {
             iconAction = if (landscape) "exit-fullscreen" else "fullscreen"
             text = if (landscape) "退出横屏全屏" else "横屏全屏"
         }
+        positionPortraitFullscreenButton()
     }
 
     private fun setLandscapePlayback(landscape: Boolean) {
@@ -666,6 +671,44 @@ class MainActivity : Activity() {
         requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         updateFullscreenButton()
+    }
+
+    private fun createPortraitFullscreenButton(): TextView =
+        text("全屏观看", 14f, Color.WHITE).apply {
+            gravity = Gravity.CENTER
+            minHeight = dp(48)
+            isFocusable = true
+            visibility = View.INVISIBLE
+            setPadding(dp(16), 0, dp(16), 0)
+            compoundDrawablePadding = dp(8)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(TvGlyph(TvGlyph.FULLSCREEN, dp(18), Color.WHITE), null, null, null)
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x44ffffff),
+                TvStyle.shape(context, Color.argb(210, 22, 26, 33), 0x55ffffff, radius = 24),
+                null,
+            )
+            setOnClickListener { setLandscapePlayback(true) }
+        }
+
+    private fun positionPortraitFullscreenButton() {
+        val entry = portraitFullscreenButton ?: return
+        val frameBounds = Rect()
+        val rootOffset = Point()
+        val portrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        val hasFrame = playbackVideoFrame?.getGlobalVisibleRect(frameBounds) == true &&
+            root.getGlobalVisibleRect(Rect(), rootOffset)
+        val y = frameBounds.bottom - rootOffset.y + dp(8)
+        var availableBottom = root.height - root.paddingBottom
+        if (::hud.isInitialized && hud.visibility == View.VISIBLE) {
+            (hud.parent as? View)?.top?.takeIf { it > root.paddingTop }?.let { availableBottom = minOf(it, availableBottom) }
+        }
+        persistentProgress?.takeIf { it.visibility == View.VISIBLE && it.top > root.paddingTop }
+            ?.let { availableBottom = minOf(it.top, availableBottom) }
+        val fits = portrait && !isLandscapePlayback() && !playError && !waitingForFirstFrame && hasFrame &&
+            y + maxOf(entry.height, dp(48)) + dp(8) <= availableBottom
+        if (fits) entry.translationY = (y - entry.top).toFloat()
+        entry.visibility = if (fits) View.VISIBLE else View.INVISIBLE
+        fullscreenButton?.visibility = if (fits) View.GONE else View.VISIBLE
     }
 
     private fun showLibraryError(problem: Throwable) {
@@ -712,7 +755,7 @@ class MainActivity : Activity() {
         root.addView(container, FrameLayout.LayoutParams(-1, -1))
         if (title != null) {
             val heading = row()
-            addButton(heading, "‹ 返回") { goBack() }
+            heading.addView(BackIconButton(this).apply { setOnClickListener { goBack() } }, lp(dp(48), dp(48)))
             heading.addView(
                 text(title, 22f).apply { setTypeface(null, Typeface.BOLD) },
                 lp(0, dp(44)).apply { weight = 1f },
@@ -1045,6 +1088,7 @@ class MainActivity : Activity() {
         }
         shell.clearBody()
         shell.select(tab)
+        shell.setBackAction(if (tab == 6 || tab == 8 || collection != null) ::goBack else null)
         nav.addAll(shell.navigation)
         val container = shell.body
         if (tab != 0 && tab != 8 && foreground && library.isLoaded && !favoriteMonitor.running)
@@ -1166,8 +1210,8 @@ class MainActivity : Activity() {
                     library.searches().map { it.query },
                     nav[tab],
                     repository::searchSuggestions,
+                    shell,
                     ::runSearch,
-
                 )
             tvSearchPanel = panel
             searchEditState?.let { panel.restore(it) }
@@ -1379,15 +1423,7 @@ class MainActivity : Activity() {
         collectionBack = null
         if (collection != null) {
             val heading = row()
-            collectionBack =
-                addButton(heading, "‹ 返回首页") {
-                        leaveCollection()
-                        showCatalog()
-                    }
-                    .apply {
-                        nextFocusUpId = id
-                        nextFocusDownId = id
-                    }
+            collectionBack = catalogShell?.backEntry
             if (collection != "hot" && collection != "hotMore") heading.addView(
                 text(
                     when (collection) {
@@ -2950,6 +2986,7 @@ class MainActivity : Activity() {
                     setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                 }
             playerView = view
+            playbackVideoFrame = view.findViewById(androidx.media3.ui.R.id.exo_content_frame)
             root.addView(view, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
             root.addView(playbackTouchSurface(), FrameLayout.LayoutParams(-1, -1))
             view.post { if (playerView === view) applyVideoRotation() }
@@ -2962,9 +2999,17 @@ class MainActivity : Activity() {
                 setBackgroundColor(Color.argb(160, 0, 0, 0))
                 addView(persistentTime); addView(persistentBar, lp(-1, dp(3)))
                 visibility = View.GONE
+                addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionPortraitFullscreenButton() }
             }
             root.addView(persistentProgress, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
-            social.attach(root, view.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame))
+            social.attach(root, playbackVideoFrame)
+            playbackVideoFrame?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                positionPortraitFullscreenButton()
+            }
+            portraitFullscreenButton = createPortraitFullscreenButton().also { entry ->
+                root.addView(entry, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+                entry.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionPortraitFullscreenButton() }
+            }
             playbackClock = TextClock(this).apply {
                 format12Hour = "HH:mm"
                 format24Hour = "HH:mm"
@@ -2989,7 +3034,6 @@ class MainActivity : Activity() {
                         )
                 }
             val heading = row()
-            addButton(heading, "返回") { returnToDetail() }
             playbackTitle =
                 text("", 18f, Color.WHITE).apply {
                     maxLines = 2
@@ -3001,7 +3045,6 @@ class MainActivity : Activity() {
                 setOnClickListener { setLandscapePlayback(!isLandscapePlayback()) }
                 heading.addView(this, lp(dp(48), dp(48)))
             }
-            updateFullscreenButton()
             hud.addView(heading)
             playbackText = text("", 13f, Color.LTGRAY).apply { setPadding(0, dp(5), 0, dp(4)) }
             hud.addView(playbackText)
@@ -3016,9 +3059,20 @@ class MainActivity : Activity() {
                 ScrollView(this).apply {
                     isVerticalScrollBarEnabled = false
                     addView(hud)
+                    addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionPortraitFullscreenButton() }
                 },
                 FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM),
             )
+            root.addView(
+                BackIconButton(this, tint = Color.WHITE, surface = Color.argb(155, 11, 15, 21)).apply {
+                    setOnClickListener { returnToDetail(forceDetail = playError || recoveryDisplayActive) }
+                },
+                FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.START).apply {
+                    topMargin = dp(6)
+                    marginStart = dp(8)
+                },
+            )
+            updateFullscreenButton()
         }
         playbackTitle.text = "${data.series.title}  ·  第 ${episodeIndex+1} 集"
         playbackText.text = preparingPlaybackText(recoveryDisplayActive, lastPlaybackFailure, false)
@@ -3027,12 +3081,12 @@ class MainActivity : Activity() {
         progressBar.visibility = View.VISIBLE
         main.removeCallbacks(hideHud)
         hud.visibility = if (hideAutoplayOverlay) View.GONE else View.VISIBLE
+        positionPortraitFullscreenButton()
         updateClock()
         controls.removeAllViews()
         controls.visibility = if (recoveryDisplayActive) View.VISIBLE else View.GONE
         if (recoveryDisplayActive) {
             addButton(controls, "取消恢复") { stopPreparingPlayback() }
-            addButton(controls, "返回选集") { returnToDetail(true) }
         }
         transportPlay = null
         sleepButton = null
@@ -3662,6 +3716,11 @@ class MainActivity : Activity() {
                     )
                     it.setHandleAudioBecomingNoisy(true)
                     it.addAnalyticsListener(playbackDriftListener(it))
+                    it.addListener(object : Player.Listener {
+                        override fun onVideoSizeChanged(videoSize: VideoSize) {
+                            applyVideoRotation()
+                        }
+                    })
                 }
             }
 
@@ -4084,6 +4143,7 @@ class MainActivity : Activity() {
         controls.removeAllViews()
         controls.visibility = View.VISIBLE
         panel = true
+        positionPortraitFullscreenButton()
         val decoding = problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable =
             if (problem is PlaybackException)
@@ -4111,7 +4171,6 @@ class MainActivity : Activity() {
                 playEpisode(episodeIndex, retryPosition, retryAutoplay)
             }
         }
-        addButton(actions, "返回选集") { returnToDetail(true) }
         addButton(actions, "查看错误详情") { tvTools.info("播放诊断", playbackDiagnostics().trim(), currentFocus) }
         if (retryable && !sleepStopped) {
             recoveryAction = addButton(controls, "停止自动重试") {
@@ -4147,6 +4206,7 @@ class MainActivity : Activity() {
         controls.clearFocus()
         hud.visibility = View.GONE
         updatePersistentProgress()
+        positionPortraitFullscreenButton()
         updateClock()
     }
 
@@ -4179,10 +4239,10 @@ class MainActivity : Activity() {
         recoveryDisplayActive = false
         playError = true
         progressBar.visibility = View.GONE
+        positionPortraitFullscreenButton()
         playbackText.text = "$lastPlaybackFailure\n恢复已取消，观看位置已保留。"
         controls.removeAllViews()
         addButton(controls, "立即重试") { playEpisode(episodeIndex, retryPosition, retryAutoplay) }
-        addButton(controls, "返回选集") { returnToDetail(true) }
     }
 
     private fun updateClock() {
@@ -4198,26 +4258,37 @@ class MainActivity : Activity() {
                 if (playError || recoveryDisplayActive || playerModalOpen()) return@setOnClickListener
                 if (panel) hidePlaybackOverlay() else showPanel()
             }
-            val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-                override fun onDown(e: MotionEvent): Boolean = true
-
-                override fun onSingleTapUp(e: MotionEvent): Boolean = performClick()
-
-                override fun onFling(
-                    start: MotionEvent?,
-                    end: MotionEvent,
-                    velocityX: Float,
-                    velocityY: Float,
-                ): Boolean {
-                    if (start == null || panel || playError || recoveryDisplayActive) return false
-                    val dy = end.y - start.y
-                    val dx = end.x - start.x
-                    if (kotlin.math.abs(dy) < dp(56) || kotlin.math.abs(dy) <= kotlin.math.abs(dx)) return false
-                    skipEpisode(if (dy < 0) 1 else -1, start.downTime)
-                    return true
+            val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+            var startX = 0f
+            var startY = 0f
+            var tracking = false
+            var moved = false
+            setOnTouchListener { _, event ->
+                val dx = kotlin.math.abs(event.x - startX)
+                val dy = event.y - startY
+                val distanceY = kotlin.math.abs(dy)
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.x
+                        startY = event.y
+                        tracking = !playerModalOpen() && episodePanel == null && !scrubbingProgress
+                        moved = false
+                    }
+                    MotionEvent.ACTION_MOVE -> if (dx > touchSlop || distanceY > touchSlop) moved = true
+                    MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> tracking = false
+                    MotionEvent.ACTION_UP -> {
+                        if (tracking && !playError && !recoveryDisplayActive && !scrubbingProgress) {
+                            if (distanceY >= dp(56) && distanceY > dx) {
+                                skipEpisode(if (dy < 0) 1 else -1, event.downTime)
+                            } else if (!moved && dx <= touchSlop && distanceY <= touchSlop) {
+                                performClick()
+                            }
+                        }
+                        tracking = false
+                    }
                 }
-            })
-            setOnTouchListener { _, event -> gestures.onTouchEvent(event) }
+                true
+            }
         }
 
     private fun playbackSeekBar(): SeekBar =
@@ -4267,6 +4338,7 @@ class MainActivity : Activity() {
         hud.visibility = View.VISIBLE
         updateClock()
         updatePlaybackText()
+        positionPortraitFullscreenButton()
         main.removeCallbacks(hideHud)
         if (player?.isPlaying == true && !playerControlsOpen() && !playerModalOpen()) main.postDelayed(hideHud, 4500)
     }
@@ -4457,12 +4529,12 @@ class MainActivity : Activity() {
     private fun applyVideoRotation() {
         val view = playerView ?: return
         val degrees = library.videoRotation
+        val width = root.width - root.paddingLeft - root.paddingRight
+        val height = root.height - root.paddingTop - root.paddingBottom
+        if (width <= 0 || height <= 0) return
         val canvas = if (degrees % 180 == 0) {
             VideoRotation.Canvas(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         } else {
-            val width = root.width - root.paddingLeft - root.paddingRight
-            val height = root.height - root.paddingTop - root.paddingBottom
-            if (width <= 0 || height <= 0) return
             VideoRotation.canvas(width, height, degrees)
         }
         val params = view.layoutParams as FrameLayout.LayoutParams
@@ -4473,6 +4545,26 @@ class MainActivity : Activity() {
             view.layoutParams = params
         }
         view.rotation = degrees.toFloat()
+        val size = player?.videoSize
+        val padding = if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT &&
+            library.frameMode == VideoFrameMode.FIT && size != null && size.width > 0 && size.height > 0 &&
+            size.pixelWidthHeightRatio > 0
+        ) {
+            val aspect = size.width * size.pixelWidthHeightRatio / size.height
+            val fittedHeight = if (degrees % 180 == 0) width / aspect else width * aspect
+            val extraHeight = (height - fittedHeight).roundToInt().coerceAtLeast(0)
+            // Bias the fitted frame upward while retaining its full width and height.
+            val desired = dp(64) + root.paddingTop - root.paddingBottom
+            desired.coerceIn(0, extraHeight)
+        } else 0
+        val left = if (degrees == 270) padding else 0
+        val top = if (degrees == 180) padding else 0
+        val right = if (degrees == 90) padding else 0
+        val bottom = if (degrees == 0) padding else 0
+        if (view.paddingLeft != left || view.paddingTop != top ||
+            view.paddingRight != right || view.paddingBottom != bottom
+        ) view.setPadding(left, top, right, bottom)
+        positionPortraitFullscreenButton()
     }
     private fun showRotationPicker(anchor: TextView) {
         tvTools.choose("画面旋转 · 仅旋转视频",VideoRotation.options.map { "${it}°" },anchor,{ index ->
@@ -4519,6 +4611,7 @@ class MainActivity : Activity() {
             { index ->
                 library.frameMode = VideoFrameMode.entries[index]
                 playerView?.resizeMode = frameResizeMode()
+                applyVideoRotation()
                 if (anchor.tag != "playback-settings")
                     anchor.text = (if (inPlayer) "画面 " else "画面模式  ·  ") + library.frameMode.label
             },
@@ -4865,6 +4958,8 @@ class MainActivity : Activity() {
         video = null
         playerView?.player = null
         playerView = null
+        playbackVideoFrame = null
+        portraitFullscreenButton = null
         persistentProgress = null
         persistentTime = null
         persistentBar = null

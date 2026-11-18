@@ -44,8 +44,12 @@ class RelatedWorksViewTest {
             assertFalse(dialog.isShowing)
             all.performClick()
             val second = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
-            activity.setContentView(TextView(activity))
+            assertTrue(descendants(second.window!!.decorView).filterIsInstance<BackIconButton>().single().performClick())
             assertFalse(second.isShowing)
+            all.performClick()
+            val third = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+            activity.setContentView(TextView(activity))
+            assertFalse(third.isShowing)
         } finally { controller.pause().stop().destroy() }
     }
 

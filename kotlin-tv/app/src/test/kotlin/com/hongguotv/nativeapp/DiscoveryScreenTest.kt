@@ -44,6 +44,12 @@ class DiscoveryScreenTest {
             screen.start(false)
             layout(screen)
             button(screen, "真人剧").performClick()
+            button(screen, "筛选").performClick()
+            chooseFromDialog { it.startsWith("设定 · ") }
+            val options = ShadowAlertDialog.getLatestAlertDialog()
+            assertTrue(views(options.window!!.decorView).filterIsInstance<BackIconButton>().single().performClick())
+            assertFalse(options.isShowing)
+            assertEquals(mapOf("genre" to "short_play"), observed.last().values)
             choose(screen, "设定", "设定30")
             assertEquals(
                 mapOf("genre" to "short_play", "category_dim_role" to "tag_30"),

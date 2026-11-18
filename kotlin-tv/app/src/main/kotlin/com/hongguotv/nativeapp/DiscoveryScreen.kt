@@ -183,13 +183,12 @@ internal class DiscoveryScreen(
         if (groups.isEmpty()) return
         val labels = groups.map { group -> "${group.label} · ${selectionLabel(group)}" }.toTypedArray()
         showDialog(
+            "筛选",
             AlertDialog.Builder(context)
-                .setTitle("筛选")
                 .setItems(labels) { dialog, index ->
                     dialog.dismiss()
                     showOptions(groups[index])
-                }
-                .setNegativeButton("关闭", null),
+                },
         )
     }
 
@@ -197,20 +196,26 @@ internal class DiscoveryScreen(
         val options = listOf(DiscoveryFilter("", "全部")) + group.options
         val selected = state.selection.values[group.type].orEmpty()
         showDialog(
+            group.label,
             AlertDialog.Builder(context)
-                .setTitle(group.label)
                 .setSingleChoiceItems(options.map { it.label }.toTypedArray(), options.indexOfFirst { it.id == selected }) { dialog, index ->
                     dialog.dismiss()
                     if (!closed && options[index].id != selected)
                         change(state.selection.choose(group.type, options[index].id))
-                }
-                .setNegativeButton("取消", null),
+                },
         )
     }
 
-    private fun showDialog(builder: AlertDialog.Builder) {
+    private fun showDialog(title: String, builder: AlertDialog.Builder) {
         filterDialog?.dismiss()
-        val dialog = builder.create()
+        val dialogContext = builder.context
+        val tint = TextView(dialogContext).currentTextColor
+        val back = BackIconButton(dialogContext, tint = tint)
+        val header = dialogBackHeader(dialogContext, title, back, tint).apply {
+            setPadding(dp(12), dp(4), dp(12), 0)
+        }
+        val dialog = builder.setCustomTitle(header).create()
+        back.setOnClickListener { dialog.dismiss() }
         filterDialog = dialog
         dialog.setOnDismissListener {
             if (filterDialog === dialog) {

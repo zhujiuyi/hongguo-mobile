@@ -165,11 +165,18 @@ internal class RelatedWorksView(
             row.addView(details, LayoutParams(0, -2, 1f))
             items.addView(row, LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
         }
-        val dialog = AlertDialog.Builder(context)
-            .setTitle("相关作品")
+        val builder = AlertDialog.Builder(context)
+        val dialogContext = builder.context
+        val tint = TextView(dialogContext).currentTextColor
+        val back = BackIconButton(dialogContext, tint = tint)
+        val header = dialogBackHeader(dialogContext, "相关作品", back, tint).apply {
+            setPadding(dp(12), dp(4), dp(12), 0)
+        }
+        val dialog = builder
+            .setCustomTitle(header)
             .setView(ScrollView(context).apply { addView(items) })
-            .setNegativeButton("关闭", null)
             .create()
+        back.setOnClickListener { dialog.dismiss() }
         allDialog = dialog
         dialog.setOnDismissListener {
             if (allDialog === dialog) allDialog = null

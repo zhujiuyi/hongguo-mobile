@@ -103,19 +103,22 @@ class LeftRailNavigationTest {
             more().requestFocus(); more().performClick()
             (field(activity, "workJob").get(activity) as? java.util.concurrent.Future<*>)?.get(5, java.util.concurrent.TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper(); layout(activity.window.decorView)
-            val back = views(activity.window.decorView).filterIsInstance<TextView>().single { it.text.toString() == "‹ 返回首页" }
+            val shell = field(activity, "catalogShell").get(activity) as CatalogShell
+            val back = shell.backEntry as BackIconButton
             assertFalse(labels().any { it.text.toString() == "热门发现" })
             val comic = labels().single { it.text.toString() == "漫剧" }
             val short = labels().single { it.text.toString() == "短剧" }
-            assertSame(back.parent, comic.parent)
-            assertSame(back.parent, short.parent)
+            assertSame(comic.parent, short.parent)
+            val topBar = back.parent as View
+            assertSame(shell, topBar.parent)
+            assertTrue(shell.indexOfChild(topBar) < shell.indexOfChild(shell.body))
             short.performClick()
             (field(activity, "workJob").get(activity) as? java.util.concurrent.Future<*>)?.get(5, java.util.concurrent.TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper(); layout(activity.window.decorView)
             assertEquals("hotMore", field(activity, "collection").get(activity))
             assertEquals(1, field(activity, "page").getInt(activity))
             assertEquals(com.hongguotv.core.ContentType.SHORT, field(activity, "hotContentType").get(activity))
-            labels().single { it.text.toString() == "‹ 返回首页" }.performClick()
+            shell.backEntry!!.performClick()
             layout(activity.window.decorView)
             assertFalse(labels().any { it.text.toString() in listOf("漫剧", "短剧", "刷新热门") })
             assertEquals(1, field(activity, "page").getInt(activity))

@@ -10,6 +10,7 @@ internal class TvGlyph(private val kind: Int, private val size: Int, var ink: In
         const val NEXT = 16
         const val FULLSCREEN = 17
         const val EXIT_FULLSCREEN = 18
+        const val BACK = 19
     }
 
     private val pen = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.7f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
@@ -45,6 +46,7 @@ internal class TvGlyph(private val kind: Int, private val size: Int, var ink: In
                 line(3f, 15f, 9f, 15f, 9f, 21f)
                 line(21f, 15f, 15f, 15f, 15f, 21f)
             }
+            BACK -> line(15f, 5f, 8f, 12f, 15f, 19f)
             0 -> { line(3f,11f,12f,3f,21f,11f); line(5f,10f,5f,21f,10f,21f,10f,15f,14f,15f,14f,21f,19f,21f,19f,10f) }
             1 -> { for(x in listOf(4f,14f)) for(y in listOf(4f,14f)) c.drawRoundRect(x,y,x+6,y+6,1f,1f,pen) }
             8 -> { c.drawCircle(12f,12f,9f,pen); line(10f,8f,16f,12f,10f,16f,10f,8f) }

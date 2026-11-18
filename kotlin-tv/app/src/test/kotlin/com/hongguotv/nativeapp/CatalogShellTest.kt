@@ -2,6 +2,7 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.TextView
 import org.junit.Assert.*
 import org.junit.Test
@@ -28,6 +29,24 @@ class CatalogShellTest {
             assertEquals(listOf("首页", "找剧", "搜索", "排行榜", "我的"), tabs.map { it.text.toString() })
             assertTrue(tabs.all { it.parent === bar && it.width >= 48 && it.height >= 48 && !it.isFocusableInTouchMode })
             assertTrue(tabs.zipWithNext().all { (left, right) -> left.right <= right.left })
+            val shortcuts = shell.navigation[6].parent as ViewGroup
+            val controls = (0 until shortcuts.childCount).map(shortcuts::getChildAt)
+            val brand = controls.single { it.contentDescription == "hongguoTV" }
+            assertTrue(brand.isShown)
+            assertNull(shell.backEntry)
+            var returns = 0
+            shell.setBackAction { returns++ }
+            layout(shell)
+            val back = shell.backEntry as BackIconButton
+            assertFalse(brand.isShown)
+            assertTrue(back.isShown && back.width >= 48 && back.height >= 48)
+            assertTrue(back.right <= shell.navigation[8].left)
+            assertTrue(back.performClick())
+            assertEquals(1, returns)
+            shell.setBackAction(null)
+            assertTrue(brand.isShown)
+            assertFalse(back.isShown)
+            assertNull(shell.backEntry)
             listOf(1, 7, 2, 3, 8, 6).forEach {
                 val control = shell.navigation[it]
                 assertTrue(control.isShown && !control.isFocusableInTouchMode)

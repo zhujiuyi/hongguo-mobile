@@ -456,6 +456,26 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         dialog = builder.create().also { open(it) }
     }
 
+    private fun showAccountBackDialog(title: String, builder: AlertDialog.Builder) {
+        val context = builder.context
+        val colors = context.obtainStyledAttributes(intArrayOf(android.R.attr.textColorPrimary))
+        val tint = colors.getColor(0, TvStyle.text)
+        colors.recycle()
+        val back = BackIconButton(context, label = "返回账号页", tint = tint)
+        val header = dialogBackHeader(context, title, back, tint).apply {
+            setPadding(dp(12), dp(8), dp(16), 0)
+        }
+        showDialog(builder.setCustomTitle(header))
+        val current = dialog ?: return
+        back.setOnClickListener {
+            if (dialog === current && current.isShowing) {
+                dialog = null
+                current.dismiss()
+                show()
+            }
+        }
+    }
+
     private fun open(next: AlertDialog, height: Int = -2, textInput: Boolean = false) {
         if (textInput) {
             next.window?.setSoftInputMode(
@@ -886,12 +906,11 @@ class AccountController(private val activity: Activity, private val play: (Cloud
 
     /** 需要重新发码或改用扫码时才打断用户；可重试的错误留在面板里显示。 */
     private fun phoneLoginFailure(failure: PhoneLogin.Failure) {
-        showDialog(
+        showAccountBackDialog(
+            "登录未完成",
             AlertDialog.Builder(activity)
-                .setTitle("登录未完成")
                 .setMessage(safeError(failure))
-                .setPositiveButton("返回账号页") { _, _ -> show() }
-                .setNeutralButton("改用扫码") { _, _ -> qrLogin() }
+                .setNeutralButton("改用扫码") { _, _ -> qrLogin() },
         )
     }
 
@@ -1044,16 +1063,11 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                                             },
                                             { acceptAccount(it.first, it.second) },
                                             { failure ->
-                                                showDialog(
+                                                showAccountBackDialog(
+                                                    "登录状态保存失败",
                                                     AlertDialog.Builder(activity)
-                                                        .setTitle("登录状态保存失败")
                                                         .setMessage(safeError(failure))
-                                                        .setPositiveButton("重新扫码") { _, _ ->
-                                                            qrLogin()
-                                                        }
-                                                        .setNegativeButton("返回账号页") { _, _ ->
-                                                            show()
-                                                        }
+                                                        .setPositiveButton("重新扫码") { _, _ -> qrLogin() },
                                                 )
                                             },
                                         )
@@ -1062,12 +1076,11 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                                 .onFailure {
                                     closeQr()
                                     status = safeError(it)
-                                    showDialog(
+                                    showAccountBackDialog(
+                                        "扫码登录未完成",
                                         AlertDialog.Builder(activity)
-                                            .setTitle("扫码登录未完成")
                                             .setMessage(status)
-                                            .setPositiveButton("重新扫码") { _, _ -> qrLogin() }
-                                            .setNegativeButton("返回账号页") { _, _ -> show() }
+                                            .setPositiveButton("重新扫码") { _, _ -> qrLogin() },
                                     )
                                 }
                         }

@@ -18,6 +18,12 @@ internal interface HandlesHorizontalKeys
 internal class CatalogShell(context: Context, private val navigate: (Int) -> Unit) : LinearLayout(context) {
     val body = LinearLayout(context).apply { orientation = VERTICAL }
     private val shortcuts = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+    private val brand = ImageView(context).apply {
+        setImageResource(R.drawable.brand_mark)
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        contentDescription = "hongguoTV"
+    }
+    private val back = BackIconButton(context).apply { visibility = GONE }
     private val bottomBar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
     private val buttons = mutableMapOf<Int, TextView>()
     private var remembered: View? = null
@@ -29,20 +35,17 @@ internal class CatalogShell(context: Context, private val navigate: (Int) -> Uni
     val hasNavigationFocus: Boolean
         get() = shortcuts.hasFocus() || bottomBar.hasFocus()
 
+    val backEntry: View?
+        get() = back.takeIf { it.visibility == VISIBLE }
+
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     init {
         orientation = VERTICAL
         setBackgroundColor(TvStyle.background)
         shortcuts.setPadding(dp(12), 0, dp(8), 0)
-        shortcuts.addView(
-            ImageView(context).apply {
-                setImageResource(R.drawable.brand_mark)
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                contentDescription = "hongguoTV"
-            },
-            LayoutParams(dp(36), dp(36)),
-        )
+        shortcuts.addView(brand, LayoutParams(dp(36), dp(36)))
+        shortcuts.addView(back, LayoutParams(-2, -2))
         shortcuts.addView(View(context), LayoutParams(0, 1, 1f))
         listOf(8 to "随心看", 6 to "设置").forEach { (index, label) ->
             shortcuts.addView(
@@ -116,6 +119,14 @@ internal class CatalogShell(context: Context, private val navigate: (Int) -> Uni
             button.isSelected = destination == selectedDestination
             paintNavigation(button)
         }
+    }
+
+    fun setBackAction(action: (() -> Unit)?) {
+        brand.visibility = if (action == null) VISIBLE else GONE
+        back.visibility = if (action == null) GONE else VISIBLE
+        back.contentDescription = "返回上一级"
+        back.nextFocusDownId = View.NO_ID
+        back.setOnClickListener(action?.let { onBack -> View.OnClickListener { onBack() } })
     }
 
     fun clearBody() {

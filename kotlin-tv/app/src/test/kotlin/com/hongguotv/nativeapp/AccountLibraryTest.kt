@@ -59,7 +59,7 @@ class AccountLibraryTest {
             )))
             method(activity, "switchTab", 6)
             val root = activity.findViewById<View>(android.R.id.content)
-            root.findViewWithTag<View>("settings-category-3").performClick()
+            assertTrue(texts(root).single { it.text.toString() == "账户" && it.isClickable }.performClick())
             val status = texts(root).single { it.text.startsWith("当前未登录") }
             val entry = texts(root).single { it.text.toString() == "登录与账户管理" }
             entry.requestFocus()

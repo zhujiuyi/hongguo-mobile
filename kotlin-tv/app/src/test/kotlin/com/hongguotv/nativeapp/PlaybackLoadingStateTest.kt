@@ -3,6 +3,7 @@ package com.hongguotv.nativeapp
 
 import android.view.View
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import com.hongguotv.core.RecoveryBudget
 import org.junit.Assert.*
@@ -35,6 +36,7 @@ class PlaybackLoadingStateTest {
             set(activity, "playbackText", status)
             set(activity, "hud", hud)
             set(activity, "controls", controls)
+            set(activity, "progressBar", SeekBar(activity))
             set(activity, "waitingForFirstFrame", true)
             set(activity, "recoveryDisplayActive", true)
             set(activity, "playbackReady", true)

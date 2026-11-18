@@ -93,10 +93,9 @@ class CloudResumePlaybackTest {
                 CloudProgress::class.java,
                 Boolean::class.javaPrimitiveType,
                 Boolean::class.javaPrimitiveType,
-                Boolean::class.javaPrimitiveType,
             )
             .apply { isAccessible = true }
-            .invoke(activity, series, resume, true, remote, false, fromHome, false)
+            .invoke(activity, series, resume, true, remote, false, fromHome)
         (get(activity, "workJob") as? Future<*>)?.get(5, TimeUnit.SECONDS)
         ShadowLooper.idleMainLooper()
     }
@@ -107,42 +106,44 @@ class CloudResumePlaybackTest {
         assertEquals(position, get(activity, "startPosition"))
     }
 
+    private fun pressPlaybackBack(activity: MainActivity) {
+        val root = get(activity, "root") as ViewGroup
+        val back = (0 until root.childCount).map(root::getChildAt).filterIsInstance<BackIconButton>().single()
+        assertEquals(View.VISIBLE, back.visibility)
+        assertTrue(back.performClick())
+    }
+
     @Test
-    fun homeStartsPlaybackAndBackOpensEpisodesEvenWithControlsVisible() =
+    fun homeStartsPlaybackAndBackArrowOpensEpisodesEvenWithControlsVisible() =
         fixture { activity, _, _ ->
             open(activity, true, fromHome = true)
             assertPlayback(activity, 2, 45000)
             assertEquals(false, get(activity, "directPlayback"))
             set(activity, "waitingForFirstFrame", false)
             (get(activity, "hud") as View).visibility = View.VISIBLE
-            MainActivity::class.java.getDeclaredMethod("goBack").apply { isAccessible = true }.invoke(activity)
+            pressPlaybackBack(activity)
             assertEquals("detail", get(activity, "screen"))
             assertEquals(false, get(activity, "homePlayback"))
         }
 
 
     @Test
-    fun phonePushBackOpensCurrentDetailDuringLoadingAndWithEitherHudState() {
+    @Config(qualifiers = "w360dp-h640dp-port-mdpi")
+    fun playbackBackArrowOpensCurrentDetailDuringLoadingAndWithEitherHudState() {
         for (waiting in listOf(true, false)) for (visible in listOf(true, false)) {
-            fixture { activity, _, account ->
-                val catalog = MainActivity::class.java.getDeclaredMethod("getPhoneCatalog")
-                    .apply { isAccessible = true }.invoke(activity) as PhoneControlCatalog
-                catalog.result(listOf(RelatedWork(series, "", false)))
-                catalog.act(org.json.JSONObject().put("action", "play").put("id", series.id)
-                    .put("scope", account.historyScope).put("source", "history"))
-                (get(activity, "workJob") as? Future<*>)?.get(5, TimeUnit.SECONDS)
-                ShadowLooper.idleMainLooper()
+            fixture { activity, _, _ ->
+                open(activity, resume = false, remote = cloud)
+                val content = activity.findViewById<View>(android.R.id.content)
+                assertTrue(texts(content).single { it.text == "继续第 3 集" }.performClick())
                 assertPlayback(activity, 2, 45000)
-                assertEquals(true, get(activity, "phonePlayback"))
                 set(activity, "waitingForFirstFrame", waiting)
                 (get(activity, "hud") as View).visibility = if (visible) View.VISIBLE else View.GONE
-                MainActivity::class.java.getDeclaredMethod("goBack").apply { isAccessible = true }.invoke(activity)
+                pressPlaybackBack(activity)
                 assertEquals("detail", get(activity, "screen"))
                 assertEquals(series.id, (get(activity, "detail") as Detail).series.id)
                 assertEquals(2, get(activity, "episodeIndex"))
-                assertEquals(false, get(activity, "phonePlayback"))
                 assertEquals(false, get(activity, "directPlayback"))
-                assertTrue(texts(activity.findViewById(android.R.id.content)).any { it.contentDescription == "第 3 集" })
+                assertTrue(content.findViewWithTag<View>("episode-2").isSelected)
             }
         }
     }
@@ -190,9 +191,8 @@ class CloudResumePlaybackTest {
     @Test
     fun detailEpisodeButtonUsesResolvedCloudPosition() = fixture { activity, _, _ ->
         open(activity, false)
-        texts(activity.findViewById(android.R.id.content))
-            .single { it.contentDescription == "第 3 集" }
-            .performClick()
+        val content = activity.findViewById<View>(android.R.id.content)
+        assertTrue(content.findViewWithTag<View>("episode-2").performClick())
         assertPlayback(activity, 2, 45000)
     }
 

@@ -12,6 +12,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
+import org.robolectric.shadows.ShadowLooper
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26], qualifiers = "w960dp-h540dp-land-mdpi")
@@ -35,7 +36,7 @@ class TvChoiceDialogTest {
             assertEquals(-1, chosen)
             assertEquals("✓", (current.getChildAt(1) as TextView).text.toString())
             other.performClick()
-            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            ShadowLooper.idleMainLooper()
             assertEquals(0, chosen)
             assertFalse(tools.showing)
             assertTrue(anchor.hasFocus())
@@ -56,6 +57,37 @@ class TvChoiceDialogTest {
             dialog.cancel()
             assertEquals(-1, chosen)
             assertFalse(tools.showing)
+        } finally { tools.destroy(); controller.pause().stop().destroy() }
+    }
+
+    @Test fun nestedPickerReturnsOnceFromEitherBackControl() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val tools = TvTools(controller.get())
+        var returns = 0
+        var chosen = -1
+        fun show() {
+            tools.choose("高级设置", listOf("画面", "声音"), null, { chosen = it }, onBack = { returns++ })
+        }
+        try {
+            show()
+            val dialog = ShadowAlertDialog.getLatestAlertDialog()
+            val root = dialog.findViewById<View>(android.R.id.content)
+            val firstChoice = root.findViewWithTag<View>("choice-0")
+            val back = root.findViewById<BackIconButton>(firstChoice.nextFocusUpId)
+            assertEquals("返回上一级", back.contentDescription)
+            assertEquals(firstChoice.id, back.nextFocusDownId)
+            assertTrue(firstChoice.hasFocus())
+            back.performClick()
+            ShadowLooper.idleMainLooper()
+            assertFalse(dialog.isShowing)
+            assertEquals(1, returns)
+
+            show()
+            ShadowAlertDialog.getLatestAlertDialog().onBackPressed()
+            ShadowLooper.idleMainLooper()
+            assertFalse(tools.showing)
+            assertEquals(2, returns)
+            assertEquals(-1, chosen)
         } finally { tools.destroy(); controller.pause().stop().destroy() }
     }
 }

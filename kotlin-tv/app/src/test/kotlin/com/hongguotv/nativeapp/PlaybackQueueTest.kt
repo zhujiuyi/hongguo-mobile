@@ -1,8 +1,12 @@
 package com.hongguotv.nativeapp
 
+import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
@@ -145,17 +149,24 @@ class PlaybackQueueTest {
             set(activity, "controls", LinearLayout(activity))
             set(activity, "hud", LinearLayout(activity))
             set(activity, "playbackText", TextView(activity))
-            set(activity, "progressBar", android.widget.ProgressBar(activity))
+            val seekBar = invoke(activity, "playbackSeekBar") as SeekBar
+            set(activity, "progressBar", seekBar)
             set(activity, "episodeDuration", 90000L)
             set(activity, "requestedAutoplay", true)
-            val root = get(activity, "root") as android.widget.FrameLayout
+            val root = get(activity, "root") as FrameLayout
             root.removeAllViews()
+            root.addView(invoke(activity, "playbackTouchSurface") as View, FrameLayout.LayoutParams(-1, -1))
             val hud = get(activity, "hud") as LinearLayout
             hud.orientation = LinearLayout.VERTICAL
+            hud.addView(seekBar, LinearLayout.LayoutParams(-1, 48))
             hud.addView(get(activity, "controls") as LinearLayout)
-            root.addView(hud)
-            root.measure(View.MeasureSpec.makeMeasureSpec(960, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(540, View.MeasureSpec.EXACTLY))
-            root.layout(0, 0, 960, 540)
+            root.addView(hud, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            val config = activity.resources.configuration
+            root.measure(
+                View.MeasureSpec.makeMeasureSpec(config.screenWidthDp, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(config.screenHeightDp, View.MeasureSpec.EXACTLY),
+            )
+            root.layout(0, 0, root.measuredWidth, root.measuredHeight)
             val remote =
                 RemoteVideo(OkHttpClient(), StreamInfo("https://example.com/next", null, "720P"))
             @Suppress("UNCHECKED_CAST")
@@ -173,13 +184,9 @@ class PlaybackQueueTest {
     @Test
     fun menuOpensSingleRowWithoutPausingAndClockModesRemainIndependent() =
         fixture { activity, fake, library, _ ->
-            val hud = LinearLayout(activity).apply { visibility = android.view.View.GONE }
-            val controls = LinearLayout(activity)
+            val hud = (get(activity, "hud") as LinearLayout).apply { visibility = View.GONE }
+            val controls = get(activity, "controls") as LinearLayout
             val clock = android.widget.TextClock(activity)
-            set(activity, "hud", hud)
-            set(activity, "controls", controls)
-            set(activity, "playbackText", TextView(activity))
-            set(activity, "progressBar", android.widget.ProgressBar(activity))
             set(activity, "playbackClock", clock)
             val before = fake.player.playWhenReady
             activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MENU))
@@ -187,7 +194,7 @@ class PlaybackQueueTest {
             assertEquals(true, get(activity, "panel"))
             assertEquals(android.view.View.VISIBLE, clock.visibility)
             assertEquals(1, controls.childCount)
-            assertEquals(5, (controls.getChildAt(0) as LinearLayout).childCount)
+            assertEquals(7, (controls.getChildAt(0) as LinearLayout).childCount)
             assertEquals(before, fake.player.playWhenReady)
             invoke(activity, "hidePlaybackOverlay")
             assertEquals(android.view.View.GONE, clock.visibility)
@@ -277,42 +284,37 @@ class PlaybackQueueTest {
         assertFalse(fake.playing)
         assertEquals(true, get(activity, "panel"))
         val controls = get(activity, "controls") as LinearLayout
-        val primary = controls.getChildAt(0) as LinearLayout
-        assertEquals(listOf("播放", "选集", "倍速 1×", "弹幕设置", "更多设置"), (0 until primary.childCount).map { (primary.getChildAt(it) as TextView).text.toString() })
-        assertTrue(primary.getChildAt(0).hasFocus())
-        primary.getChildAt(0).performClick()
+        val play = controls.findViewWithTag<TextView>("transport-play")
+        assertEquals("播放", play.text.toString())
+        assertTrue(play.hasFocus())
+        play.performClick()
         assertTrue(fake.playing)
-        assertEquals(false, get(activity, "panel"))
+        assertEquals("暂停", play.text.toString())
+        assertEquals(true, get(activity, "panel"))
     }
 
     @Test
-    fun inlineEpisodesBackOnlyCollapsesAndPlayResumesWithoutDoubleToggle() = fixture { activity, fake, _, _ ->
+    fun episodeDialogPausesAndClosingResumesWithControlsOpen() = fixture { activity, fake, _, _ ->
         press(activity, KeyEvent.KEYCODE_MENU)
         val controls = get(activity, "controls") as LinearLayout
-        val menu = controls.getChildAt(0) as LinearLayout
-        val episodes = menu.getChildAt(1)
-        episodes.performClick()
+        controls.findViewWithTag<View>("episodes").performClick()
+        val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+        assertTrue(dialog.isShowing)
         assertFalse(fake.playing)
-        assertEquals(2, controls.childCount)
-        assertEquals(false, invoke(activity, "playerModalOpen"))
-        press(activity, KeyEvent.KEYCODE_BACK)
+        dialog.onBackPressed()
+        ShadowLooper.idleMainLooper()
+        assertFalse(dialog.isShowing)
         assertNull(get(activity, "episodePanel"))
         assertEquals(true, get(activity, "panel"))
         assertEquals(1, controls.childCount)
         assertTrue(fake.playing)
-        episodes.performClick()
-        assertFalse(fake.playing)
-        menu.getChildAt(0).performClick()
-        assertTrue(fake.playing)
-        assertNull(get(activity, "episodePanel"))
-        assertEquals(false, get(activity, "panel"))
     }
 
     @Test
     fun focusSurvivesFirstFrameAndTimeoutAndDirectionsDoNotSwitchEpisodes() = fixture { activity, _, _, _ ->
         press(activity, KeyEvent.KEYCODE_MENU)
         val controls = get(activity, "controls") as LinearLayout
-        val selection = (controls.getChildAt(0) as LinearLayout).getChildAt(1)
+        val selection = controls.findViewWithTag<View>("episodes")
         selection.requestFocus()
         set(activity, "waitingForFirstFrame", true)
         invoke(activity, "playbackFirstFrame")
@@ -415,15 +417,40 @@ class PlaybackQueueTest {
     }
 
     @Test
-    fun phoneDirectionUsesNewShortcutAndBackClosesMenuBeforeLeavingHomePlayback() = fixture { activity, _, _, _ ->
-        invoke(activity, "phoneControl", org.json.JSONObject().put("action", "key").put("value", "down"))
+    @Config(qualifiers = "w420dp-h900dp-port-mdpi")
+    fun slowSwipesSwitchEpisodesWithControlsHiddenAndOpen() = fixture { activity, fake, library, _ ->
+        val root = get(activity, "root") as FrameLayout
+        val hud = get(activity, "hud") as LinearLayout
+        fun gesture(fromY: Float, toY: Float = fromY) {
+            val downTime = android.os.SystemClock.uptimeMillis()
+            fun send(action: Int, offsetMs: Long, y: Float) {
+                val event = MotionEvent.obtain(downTime, downTime + offsetMs, action, root.width / 2f, y, 0)
+                try {
+                    assertTrue(root.dispatchTouchEvent(event))
+                } finally {
+                    event.recycle()
+                }
+            }
+            send(MotionEvent.ACTION_DOWN, 0, fromY)
+            if (fromY != toY) send(MotionEvent.ACTION_MOVE, 450, (fromY + toY) / 2f)
+            send(MotionEvent.ACTION_UP, if (fromY == toY) 60 else 900, toY)
+        }
+
+        invoke(activity, "hidePlaybackOverlay")
+        invoke(activity, "queuePreparedEpisode", "102:${library.maxQuality}")
+        gesture(300f, 220f)
         assertEquals(1, get(activity, "pendingEpisodeTarget"))
-        press(activity, KeyEvent.KEYCODE_MENU)
-        set(activity, "homePlayback", true)
-        invoke(activity, "goBack")
-        assertEquals(false, get(activity, "panel"))
-        assertEquals("player", get(activity, "screen"))
-        assertNull(get(activity, "pendingEpisodeTarget"))
+        ShadowLooper.idleMainLooper(200, TimeUnit.MILLISECONDS)
+        assertEquals(1, fake.calls.count { it == "seekToNextMediaItem" })
+        assertEquals(true, invoke(activity, "advanceQueuedEpisode", 12000L, false))
+        assertEquals(View.GONE, hud.visibility)
+
+        gesture(220f)
+        assertEquals(View.VISIBLE, hud.visibility)
+        assertEquals(true, get(activity, "panel"))
+        gesture(220f, 300f)
+        assertEquals(0, get(activity, "pendingEpisodeTarget"))
+        assertEquals(true, get(activity, "panel"))
     }
 
     @Test
@@ -494,7 +521,6 @@ class PlaybackQueueTest {
                 set(activity, "playerView", PlayerView(activity))
                 set(activity, "hud", LinearLayout(activity))
                 set(activity, "playbackText", TextView(activity))
-                set(activity, "progressBar", android.widget.ProgressBar(activity))
                 invoke(activity, "playEpisode", 1, 0L, true, false, false, true)
                 assertEquals(android.view.View.GONE, (get(activity, "hud") as LinearLayout).visibility)
                 assertFalse(
@@ -545,7 +571,6 @@ class PlaybackQueueTest {
                 set(activity, "playerView", PlayerView(activity))
                 set(activity, "hud", LinearLayout(activity).apply { visibility = View.GONE })
                 set(activity, "playbackText", TextView(activity))
-                set(activity, "progressBar", android.widget.ProgressBar(activity))
                 invoke(activity, "playEpisode", 1, 0L, true, false, false, false)
                 assertEquals(android.view.View.GONE, (get(activity, "hud") as LinearLayout).visibility)
                 assertFalse(
@@ -592,7 +617,6 @@ class PlaybackQueueTest {
         val text = TextView(activity)
         set(activity, "hud", LinearLayout(activity))
         set(activity, "playbackText", text)
-        set(activity, "progressBar", android.widget.ProgressBar(activity))
         invoke(
             activity,
             "playerFailure",
@@ -640,7 +664,6 @@ class PlaybackQueueTest {
                 set(activity, "playerView", PlayerView(activity))
                 set(activity, "hud", LinearLayout(activity))
                 set(activity, "playbackText", TextView(activity))
-                set(activity, "progressBar", android.widget.ProgressBar(activity))
                 invoke(activity, "playEpisode", 1, 0L, true, false, false, false)
                 assertFalse(job.isCancelled)
                 invoke(activity, "invalidatePage")
