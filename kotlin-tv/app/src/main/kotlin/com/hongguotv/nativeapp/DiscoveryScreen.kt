@@ -1,15 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
-// 找剧页面的界面辅助组件；与遥控器三栏搜索入口配合使用。
-
 import android.app.AlertDialog
 import android.content.Context
+import android.graphics.Typeface
+import android.text.TextUtils
+import android.view.Gravity
 import android.view.View
-import android.widget.*
-import com.hongguotv.core.*
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import com.hongguotv.core.DiscoveryBrowserState
+import com.hongguotv.core.DiscoveryCursor
+import com.hongguotv.core.DiscoveryFilter
+import com.hongguotv.core.DiscoveryGroup
+import com.hongguotv.core.DiscoverySelection
+import com.hongguotv.core.FilteredDiscoveryPage
+import com.hongguotv.core.Series
 
-/** Server-defined filter groups; each row selects one condition and rows combine on the server. */
+/** Filter options are supplied by the server for the currently selected content type. */
 internal class DiscoveryScreen(
     context: Context,
     private val state: DiscoveryBrowserState,
@@ -17,497 +28,79 @@ internal class DiscoveryScreen(
     private val cover: (ImageView, String) -> Unit,
     private val open: (Series) -> Unit,
     private val more: (Series, View) -> Unit,
-    private val fetch:
-        (DiscoverySelection, DiscoveryCursor?, (FilteredDiscoveryPage?, Throwable?) -> Unit) -> Unit,
+    private val fetch: (DiscoverySelection, DiscoveryCursor?, (FilteredDiscoveryPage?, Throwable?) -> Unit) -> Unit,
 ) : LinearLayout(context) {
-    private val types = LinearLayout(context)
-    private val groups = LinearLayout(context).apply { orientation = VERTICAL }
-    private val scroll =
-        ScrollView(context).apply {
-            isFillViewport = false
-            isVerticalScrollBarEnabled = false
-            addView(groups)
-        }
-    private val summary =
-        TextView(context).apply {
-            textSize = 12f
-            setTextColor(TvStyle.muted)
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-    private val controls = linkedMapOf<Pair<String, String>, TextView>()
-    private val strips = linkedMapOf<String, HorizontalScrollView>()
-    private val toggle =
-        button("收起筛选") {
-            expand(!state.expanded)
-            toggleFocus()
-        }
+    private val genreChoices = LinearLayout(context)
+    private val genres = HorizontalScrollView(context).apply {
+        isHorizontalScrollBarEnabled = false
+        addView(genreChoices, FrameLayout.LayoutParams(-2, -2))
+    }
+    private val summary = TextView(context).apply {
+        textSize = 13f
+        setTextColor(TvStyle.muted)
+        maxLines = 2
+        ellipsize = TextUtils.TruncateAt.END
+        setPadding(0, dp(4), 0, dp(5))
+    }
+    private val filter = button("筛选") { showFilters() }
     private val reset = button("重置") { change(DiscoverySelection()) }
     private val refresh = button("刷新") { request(null) }
-    private val emptyState = TvEmptyState(context, "正在加载剧目", "稍候，即可按类型浏览")
-    private val browser: ContinuousCatalogView
+    private val emptyState = TvEmptyState(context, "正在加载剧目", "")
+    private val browser = ContinuousCatalogView(
+        context,
+        5,
+        filter,
+        { item, recycled ->
+            (recycled as? CatalogPosterCard ?: CatalogPosterCard(context)).apply {
+                show(item)
+                cover(image, item.cover)
+            }
+        },
+        { item -> if (state.position?.first != item.id) state.position = item.id to 0 },
+        open,
+        more,
+        { state.next?.let(::request) },
+    )
+    private var selectedGenre: TextView? = null
     private var filterDialog: AlertDialog? = null
-    private var loading = false
     private var closed = false
-    private var headerOffset = 0
-    private var browseStep = state.browseStep
-    private var restoring = true
-    private var resetting = false
     private var serial = 0
     var navigationChanged: (() -> Unit)? = null
 
-    private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
-
     init {
-        val restoredOffset = state.headerOffset
         orientation = VERTICAL
-        val bar = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        bar.addView(types, LayoutParams(0, -2, 1f))
-        bar.addView(toggle)
-        bar.addView(reset)
-        bar.addView(refresh)
-        val header = LinearLayout(context).apply { orientation = VERTICAL }
-        header.addView(TextView(context).apply {
-            text = "找剧"; textSize = 28f; setTextColor(TvStyle.text)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding(0, 0, 0, dp(12))
-        })
-        header.addView(bar)
-        addView(header)
-        addView(scroll, LayoutParams(-1, dp(200)))
-        summary.setPadding(0, dp(8), 0, dp(8))
-        addView(summary)
-        browser =
-            ContinuousCatalogView(
-                context,
-                5,
-                toggle,
-                { item, recycled ->
-                    (recycled as? CatalogPosterCard ?: CatalogPosterCard(context)).apply {
-                        show(item)
-                        cover(image, item.cover)
-                    }
-                },
-                { item -> state.position = item.id to 0 },
-                open,
-                more,
-                { if (!loading) request(state.next) },
-            )
-        browser.onBrowsePosition = { position -> updateHeaderOffset(position) }
-        browser.onGridFocus = { focused ->
-            if (focused) {
-                resetting = false
-                updateHeaderOffset()
-            } else if (resetting || browser.grid.selectedItemPosition < 5 || !hasFocus()) {
-                resetHeaderOffset()
-            }
+        val heading = TextView(context).apply {
+            text = "找剧"
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(TvStyle.text)
         }
-        browser.useRemoteNavigation()
+        val bar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        bar.addView(heading, LayoutParams(0, -2, 1f))
+        listOf(filter, reset, refresh).forEach { control ->
+            bar.addView(control, LayoutParams(-2, -2).apply { marginStart = dp(6) })
+        }
+        addView(bar, LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        addView(genres, LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        addView(summary, LayoutParams(-1, -2))
         addView(browser, LayoutParams(-1, 0, 1f))
         addView(emptyState, LayoutParams(-1, 0, 1f))
+        browser.setSideEntry(upper)
         renderFilters()
         showItems()
-        expand(state.expanded)
-        headerOffset = restoredOffset
-        post {
-            if (!closed) {
-                scroll.scrollTo(0, state.filterVerticalOffset)
-                restoring = false
-                requestLayout()
-            }
-        }
     }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        groups.measure(
-            widthMeasureSpec,
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
-        val height =
-            minOf(
-                groups.measuredHeight,
-                minOf(dp(260), (View.MeasureSpec.getSize(heightMeasureSpec) * .48f).toInt()),
-            )
-        if (scroll.layoutParams.height != height)
-            scroll.layoutParams = scroll.layoutParams.apply { this.height = height }
-        val viewport = View.MeasureSpec.getSize(heightMeasureSpec)
-        super.onMeasure(
-            widthMeasureSpec,
-            View.MeasureSpec.makeMeasureSpec(viewport + headerOffset, View.MeasureSpec.EXACTLY),
-        )
-        setMeasuredDimension(measuredWidth, viewport)
-    }
-
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        super.onLayout(changed, l, t, r, b + headerOffset)
-        scrollTo(0, headerOffset)
-    }
-
-    private fun resetHeaderOffset() {
-        val changed = headerOffset != 0
-        headerOffset = 0
-        state.headerOffset = 0
-        if (scrollY != 0) scrollTo(0, 0)
-        if (changed) requestLayout()
-    }
-
-    private fun updateHeaderOffset(
-        position: Int = browser.grid.selectedItemPosition.coerceAtLeast(0)
-    ) {
-        if (restoring) return
-        if (resetting) {
-            if (position > 0) resetting = false else return
-        }
-        val header = getChildAt(0).height + scroll.height + summary.height
-        if (header <= 0) return
-        val cardHeight = browser.grid.getChildAt(0)?.height ?: 0
-        if (browseStep == 0 && cardHeight > 0) browseStep = cardHeight + dp(10)
-        val step = if (browseStep > 0) browseStep else dp(180) + dp(10)
-        val row = position / 5
-        val offset =
-            if (!state.expanded) 0
-            else if (row > 0) minOf(header, row * step)
-            else if (browser.grid.hasFocus() && cardHeight > 0 && height > 0) {
-                val nonGrid = (browser.height - browser.grid.height).coerceAtLeast(0)
-                val baseGrid = height - header - nonGrid
-                (cardHeight + dp(6) - baseGrid).coerceIn(0, header)
-            } else 0
-        if (headerOffset != offset) {
-            headerOffset = offset
-            if (offset == 0 && scrollY != 0) scrollTo(0, 0)
-            requestLayout()
-        }
-    }
-
-    override fun requestChildFocus(child: View, focused: View) {
-        if (child !== browser) resetHeaderOffset()
-        super.requestChildFocus(child, focused)
-    }
-
-    private fun button(label: String, chosen: () -> Boolean = { false }, action: () -> Unit) =
-        TextView(context).apply {
-            id = View.generateViewId()
-            text = label
-            textSize = 12f
-            includeFontPadding = false
-            maxLines = 1
-            isFocusable = true
-            isClickable = true
-            setPadding(dp(8), dp(5), dp(8), dp(5))
-            minHeight = dp(30)
-            fun paint() {
-                val selected = chosen()
-                isSelected = selected
-                setTextColor(if (selected) TvStyle.accent else TvStyle.text)
-                background = TvStyle.card(context, hasFocus(), selected)
-            }
-            setOnFocusChangeListener { _, _ -> paint() }
-            setOnClickListener { action() }
-            paint()
-        }
-
-    private fun toggleFocus() {
-        toggle.requestFocus()
-    }
-
-    private fun expand(value: Boolean) {
-        headerOffset = 0
-        scrollTo(0, 0)
-        requestLayout()
-        state.expanded = value
-        scroll.visibility = if (value) VISIBLE else GONE
-        toggle.text = if (value) "收起筛选" else "展开筛选"
-        val target =
-            if (value)
-                controls.entries.firstOrNull { it.key.first != "genre" }?.value?.id
-                    ?: browser.grid.id
-            else browser.grid.id
-        (types.getChildAt(0) as? LinearLayout)?.let { row ->
-            for (i in 0 until row.childCount) row.getChildAt(i).nextFocusDownId = target
-        }
-        controls.filterKeys { it.first == "genre" }.values.forEach { it.nextFocusDownId = target }
-        listOf(toggle, reset, refresh).forEach { it.nextFocusDownId = target }
-    }
-
-    private fun renderFilters() {
-        val focused = controls.entries.firstOrNull { it.value.hasFocus() }?.key
-        controls.clear()
-        strips.clear()
-        types.removeAllViews()
-        groups.removeAllViews()
-        val available = state.groups.ifEmpty { listOf(DiscoveryGroup("genre", "类型", emptyList())) }
-        available.forEach { group ->
-            val row = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-            if (group.type != "genre")
-                row.addView(
-                    TextView(context).apply {
-                        text = group.label
-                        textSize = 12f
-                        setTextColor(TvStyle.muted)
-                    },
-                    LayoutParams(dp(40), -2),
-                )
-            val choices = LinearLayout(context)
-            val all = DiscoveryFilter("", "全部")
-            val options = listOf(all) + group.options
-            val budget = (resources.displayMetrics.widthPixels - dp(320)).coerceAtLeast(dp(180))
-            var used = 0
-            val visibleOptions = options.takeWhile { option ->
-                val probe = button(option.label) {}
-                probe.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED)
-                used += probe.measuredWidth + dp(8)
-                used <= budget
-            }.toMutableList()
-            val overflow = visibleOptions.size < options.size && group.type != "genre"
-            if (!overflow) { visibleOptions.clear(); visibleOptions.addAll(options) }
-            val current = state.selection.values[group.type].orEmpty()
-            options.firstOrNull { it.id == current }?.let { selected ->
-                if (overflow && selected !in visibleOptions) {
-                    if (visibleOptions.size > 1) visibleOptions.removeAt(visibleOptions.lastIndex)
-                    visibleOptions.add(selected)
-                }
-            }
-            visibleOptions.forEach { option ->
-                val chip =
-                    button(
-                            if (group.type == "genre" && option.id.isEmpty()) "全部类型"
-                            else option.label,
-                            { state.selection.values[group.type].orEmpty() == option.id },
-                        ) {
-                            if (state.selection.values[group.type].orEmpty() != option.id)
-                                change(
-                                    state.selection.choose(group.type, option.id),
-                                    group.type to option.id,
-                                )
-                        }
-                        .apply {
-                            if (group.type != "genre") {
-                                minHeight = dp(26)
-                                setPadding(dp(8), dp(3), dp(8), dp(3))
-                            }
-                        }
-                controls[group.type to option.id] = chip
-                choices.addView(chip, LayoutParams(-2, -2).apply { rightMargin = dp(8) })
-            }
-            val strip =
-                HorizontalScrollView(context).apply {
-                    isHorizontalScrollBarEnabled = false
-                    isFocusable = false
-                    addView(choices)
-                }
-            strips[group.type] = strip
-            strip.post {
-                if (!closed) {
-                    val selected =
-                        controls[group.type to state.selection.values[group.type].orEmpty()]
-                    var offset = state.filterOffsets[group.type] ?: 0
-                    if (
-                        selected != null &&
-                            (selected.left < offset || selected.right > offset + strip.width)
-                    )
-                        offset = (selected.left - strip.width / 3).coerceAtLeast(0)
-                    strip.scrollTo(offset, 0)
-                }
-            }
-            row.addView(strip, LayoutParams(0, -2, 1f))
-            if (overflow) {
-                val expand = button("全部 · ${group.options.size} 项 ›") { showAllFilters(group) }
-                controls[group.type to "__all_options__"] = expand
-                row.addView(expand, LayoutParams(-2, -2).apply { leftMargin = dp(8) })
-            }
-            if (group.type == "genre") types.addView(row, LayoutParams(-1, -2))
-            else groups.addView(row, LayoutParams(-1, -2).apply { bottomMargin = dp(3) })
-        }
-        val rows =
-            available.map { group ->
-                controls.filterKeys { it.first == group.type }.values.toList()
-            }
-        rows.forEachIndexed { rowIndex, row ->
-            row.forEachIndexed { index, chip ->
-                chip.nextFocusLeftId = row.getOrNull(index - 1)?.id ?: chip.id
-                chip.nextFocusRightId =
-                    row.getOrNull(index + 1)?.id ?: if (rowIndex == 0) toggle.id else chip.id
-                chip.nextFocusUpId =
-                    rows
-                        .getOrNull(rowIndex - 1)
-                        ?.let { previous ->
-                            previous.getOrElse(index.coerceAtMost(previous.lastIndex)) { entry() }
-                        }
-                        ?.id ?: chip.id
-                chip.nextFocusDownId =
-                    rows
-                        .getOrNull(rowIndex + 1)
-                        ?.let { next ->
-                            next.getOrElse(index.coerceAtMost(next.lastIndex)) { toggle }
-                        }
-                        ?.id ?: browser.grid.id
-            }
-        }
-        listOf(toggle, reset, refresh).forEach { it.nextFocusUpId = it.id }
-        toggle.nextFocusLeftId = rows.firstOrNull()?.lastOrNull()?.id ?: upper.id
-        toggle.nextFocusRightId = reset.id
-        reset.nextFocusLeftId = toggle.id
-        reset.nextFocusRightId = refresh.id
-        refresh.nextFocusLeftId = reset.id
-        expand(state.expanded)
-        focused?.let { controls[it]?.requestFocus() }
-        navigationChanged?.invoke()
-    }
-
-    private fun showAllFilters(group: DiscoveryGroup) {
-        filterDialog?.dismiss()
-        val options = listOf(DiscoveryFilter("", "全部")) + group.options
-        val panel = LinearLayout(context).apply {
-            orientation = VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(18))
-            background = TvVisual.panel(context, modal = true)
-        }
-        panel.addView(TextView(context).apply {
-            text = "${group.label} · 全部选项"
-            textSize = 20f
-            setTextColor(TvStyle.text)
-            setPadding(0, 0, 0, dp(16))
-        })
-        val grid = GridLayout(context).apply { columnCount = 4 }
-        val cells = options.map { option ->
-            button(option.label, { state.selection.values[group.type].orEmpty() == option.id }) {
-                filterDialog?.dismiss()
-                if (!closed && state.selection.values[group.type].orEmpty() != option.id)
-                    change(state.selection.choose(group.type, option.id), group.type to option.id)
-            }.also { cell ->
-                cell.gravity = android.view.Gravity.CENTER
-                grid.addView(cell, GridLayout.LayoutParams().apply {
-                    width = dp(140)
-                    height = dp(42)
-                    setMargins(dp(4), dp(4), dp(4), dp(4))
-                })
-            }
-        }
-        cells.forEachIndexed { index, cell ->
-            cell.nextFocusLeftId = cells.getOrNull(index - 1)?.takeIf { index % 4 != 0 }?.id ?: cell.id
-            cell.nextFocusRightId = cells.getOrNull(index + 1)?.takeIf { index % 4 != 3 }?.id ?: cell.id
-            cell.nextFocusUpId = cells.getOrNull(index - 4)?.id ?: cell.id
-            cell.nextFocusDownId = cells.getOrNull(index + 4)?.id ?: cell.id
-        }
-        panel.addView(ScrollView(context).apply { addView(grid) }, LayoutParams(-1, -2))
-        val dialog = AlertDialog.Builder(context).setView(panel).create()
-        filterDialog = dialog
-        dialog.setOnDismissListener {
-            if (filterDialog === dialog) filterDialog = null
-            if (!closed) controls[group.type to "__all_options__"]?.requestFocus()
-        }
-        dialog.show()
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.window?.setLayout(dp(640), minOf(dp(420), (resources.displayMetrics.heightPixels * .85f).toInt()))
-        cells[options.indexOfFirst { it.id == state.selection.values[group.type].orEmpty() }.coerceAtLeast(0)].requestFocus()
-    }
-
-    private fun showItems() {
-        browser.show(
-            state.items,
-            state.next != null,
-            state.position?.let { ContinuousCatalogView.Position(it.first, it.second) },
-        )
-        browser.visibility = if (state.loaded) VISIBLE else GONE
-        emptyState.visibility = if (state.loaded) GONE else VISIBLE
-        summary.text = selectionSummary()
-    }
-
-    private fun selectionSummary(): String {
-        val selected =
-            state.selection.values
-                .map { (type, id) ->
-                    val group = state.groups.firstOrNull { it.type == type }
-                    "${group?.label ?: DiscoverySelection.labels[type]}：${group?.options?.firstOrNull { it.id==id }?.label ?: id}"
-                }
-                .joinToString(" · ")
-        return selected.ifEmpty { "全部类型 · 全部条件" }
-    }
-
-    private fun change(selection: DiscoverySelection, focus: Pair<String, String>? = null) {
-        browseStep = 0
-        state.browseStep = 0
-        if (focus?.first == "genre" || selection.values.isEmpty()) {
-            state.filterOffsets.clear()
-            state.filterVerticalOffset = 0
-        } else focus?.let { state.filterOffsets.remove(it.first) }
-        state.selection = selection
-        state.items = emptyList()
-        state.next = null
-        state.loaded = false
-        state.position = null
-        state.expanded = true
-        if (focus?.first == "genre" || selection.values.isEmpty())
-            state.groups = state.groups.filter { it.type == "genre" }
-        showItems()
-        renderFilters()
-        focus?.let { controls[it]?.requestFocus() }
-        request(null)
-    }
-
-    private fun request(cursor: DiscoveryCursor?) {
-        val ticket = ++serial
-        loading = true
-        emptyState.heading.text = "正在加载剧目"
-        emptyState.description.text = "稍候，即可按类型浏览"
-        refresh.text = "读取中…"
-        summary.text = if (cursor == null) "正在按当前条件加载…" else "正在继续加载…"
-        fetch(state.selection, cursor) { result, error ->
-            if (closed || ticket != serial) return@fetch
-            loading = false
-            refresh.text = "刷新"
-            if (result != null) {
-                if (cursor == null) {
-                    state.items = result.items
-                    state.groups = result.groups
-                    state.loaded = true
-                    state.next = result.next
-                    renderFilters()
-                    showItems()
-                } else {
-                    val seen = state.items.mapTo(HashSet()) { it.id }
-                    state.items = state.items + result.items.filter { seen.add(it.id) }
-                    state.next = result.next
-                    browser.append(result.items, result.next != null)
-                    summary.text = selectionSummary()
-                }
-            } else if (cursor != null) {
-                browser.fail(error)
-                summary.text = "加载失败，已保留列表 · ${selectionSummary()}"
-            } else {
-                summary.text = "分类读取失败，请按刷新重试"
-                if (!state.loaded) {
-                    emptyState.heading.text = "暂时无法加载剧目"
-                    emptyState.description.text = "请检查网络连接，再选择右上角刷新"
-                }
-            }
-        }
-    }
-
-    fun entry(): View = controls["genre" to state.selection.values["genre"].orEmpty()] ?: toggle
+    fun entry(): View = selectedGenre ?: refresh
 
     fun setSideEntry(view: View) { browser.setSideEntry(view) }
 
     fun backToTop() {
-        resetting = true
-        headerOffset = 0
-        state.headerOffset = 0
-        state.filterVerticalOffset = 0
-        scroll.scrollTo(0, 0)
-        scrollTo(0, 0)
         browser.resetToTop()
         state.position = state.items.firstOrNull()?.let { it.id to 0 }
-        requestLayout()
-        post {
-            if (!closed && !browser.grid.hasFocus()) {
-                resetting = false
-                resetHeaderOffset()
-            }
-        }
     }
 
     fun start(focus: Boolean) {
-        if (focus) {
+        if (focus && !isInTouchMode) {
             if (state.position != null && state.items.isNotEmpty()) browser.enter()
             else entry().requestFocus()
         }
@@ -516,15 +109,201 @@ internal class DiscoveryScreen(
 
     fun close() {
         if (closed) return
-        state.headerOffset = headerOffset
-        state.browseStep = browseStep
-        state.filterVerticalOffset = scroll.scrollY
-        strips.forEach { (type, strip) -> state.filterOffsets[type] = strip.scrollX }
         closed = true
-        filterDialog?.dismiss()
-        filterDialog = null
         serial++
-        browser.capture()?.let { state.position = it.id to it.top }
+        filterDialog?.dismiss()
+        state.filterOffsets["genre"] = genres.scrollX
+        rememberPosition()
         browser.close()
+    }
+
+    private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
+
+    private fun button(label: String, action: () -> Unit) = TextView(context).apply {
+        id = View.generateViewId()
+        text = label
+        textSize = 14f
+        gravity = Gravity.CENTER
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
+        isFocusable = true
+        minHeight = dp(48)
+        setPadding(dp(12), dp(6), dp(12), dp(6))
+        setOnFocusChangeListener { _, _ -> paintButton(this) }
+        setOnClickListener { action() }
+        paintButton(this)
+    }
+
+    private fun paintButton(button: TextView) {
+        button.setTextColor(if (button.isSelected) TvStyle.accent else TvStyle.text)
+        button.background = catalogControlBackground(context, button.hasFocus(), button.isSelected)
+        button.alpha = if (button.isEnabled) 1f else .5f
+    }
+
+    private fun extraGroups() = state.groups.filter { it.type != "genre" && it.options.isNotEmpty() }
+
+    private fun renderFilters() {
+        val offset = if (genreChoices.childCount == 0) state.filterOffsets["genre"] ?: 0 else genres.scrollX
+        val hadFocus = genreChoices.hasFocus()
+        genreChoices.removeAllViews()
+        selectedGenre = null
+        val options = state.groups.firstOrNull { it.type == "genre" }?.options.orEmpty()
+        val selectedId = state.selection.values["genre"].orEmpty()
+        (listOf(DiscoveryFilter("", "全部类型")) + options).forEach { option ->
+            val chip = button(option.label) {
+                if (option.id != state.selection.values["genre"].orEmpty())
+                    change(state.selection.choose("genre", option.id))
+            }
+            chip.maxWidth = dp(188)
+            chip.isSelected = option.id == selectedId
+            if (chip.isSelected) selectedGenre = chip
+            paintButton(chip)
+            genreChoices.addView(chip, LayoutParams(-2, -2).apply { marginEnd = dp(6) })
+            chip.nextFocusDownId = browser.grid.id
+        }
+        selectedGenre?.let { chip ->
+            genres.post {
+                if (closed || chip.parent !== genreChoices) return@post
+                val target = if (chip.left < offset || chip.right > offset + genres.width)
+                    (chip.left - dp(6)).coerceAtLeast(0) else offset
+                genres.scrollTo(target, 0)
+                if (hadFocus && !isInTouchMode) chip.requestFocus()
+            }
+        }
+        val selectedCount = state.selection.values.count { (type, _) -> type != "genre" }
+        filter.text = if (selectedCount == 0) "筛选" else "筛选 ($selectedCount)"
+        filter.isEnabled = extraGroups().isNotEmpty()
+        paintButton(filter)
+        reset.visibility = if (state.selection.values.isNotEmpty()) VISIBLE else GONE
+        navigationChanged?.invoke()
+    }
+
+    private fun showFilters() {
+        val groups = extraGroups()
+        if (groups.isEmpty()) return
+        val labels = groups.map { group -> "${group.label} · ${selectionLabel(group)}" }.toTypedArray()
+        showDialog(
+            AlertDialog.Builder(context)
+                .setTitle("筛选")
+                .setItems(labels) { dialog, index ->
+                    dialog.dismiss()
+                    showOptions(groups[index])
+                }
+                .setNegativeButton("关闭", null),
+        )
+    }
+
+    private fun showOptions(group: DiscoveryGroup) {
+        val options = listOf(DiscoveryFilter("", "全部")) + group.options
+        val selected = state.selection.values[group.type].orEmpty()
+        showDialog(
+            AlertDialog.Builder(context)
+                .setTitle(group.label)
+                .setSingleChoiceItems(options.map { it.label }.toTypedArray(), options.indexOfFirst { it.id == selected }) { dialog, index ->
+                    dialog.dismiss()
+                    if (!closed && options[index].id != selected)
+                        change(state.selection.choose(group.type, options[index].id))
+                }
+                .setNegativeButton("取消", null),
+        )
+    }
+
+    private fun showDialog(builder: AlertDialog.Builder) {
+        filterDialog?.dismiss()
+        val dialog = builder.create()
+        filterDialog = dialog
+        dialog.setOnDismissListener {
+            if (filterDialog === dialog) {
+                filterDialog = null
+                if (!closed && !isInTouchMode) filter.requestFocus()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun selectionLabel(group: DiscoveryGroup): String {
+        val id = state.selection.values[group.type] ?: return "全部"
+        return group.options.firstOrNull { it.id == id }?.label ?: id
+    }
+
+    private fun selectionSummary() = extraGroups()
+        .filter { it.type in state.selection.values }
+        .joinToString(" · ") { "${it.label}：${selectionLabel(it)}" }
+
+    private fun setSummary(text: String) {
+        summary.text = text
+        summary.visibility = if (text.isBlank()) GONE else VISIBLE
+    }
+
+    private fun rememberPosition() {
+        browser.capture()?.let { state.position = it.id to it.top }
+    }
+
+    private fun showItems(hasMore: Boolean = state.next != null) {
+        browser.show(
+            state.items,
+            hasMore,
+            state.position?.let { ContinuousCatalogView.Position(it.first, it.second) },
+        )
+        browser.visibility = if (state.loaded) VISIBLE else GONE
+        emptyState.visibility = if (state.loaded) GONE else VISIBLE
+        setSummary(selectionSummary())
+    }
+
+    private fun change(selection: DiscoverySelection) {
+        if (selection == state.selection) return
+        if (selection.values["genre"] != state.selection.values["genre"] || selection.values.isEmpty())
+            state.groups = state.groups.filter { it.type == "genre" }
+        state.selection = selection
+        state.items = emptyList()
+        state.next = null
+        state.loaded = false
+        state.position = null
+        renderFilters()
+        showItems()
+        request(null)
+    }
+
+    private fun request(cursor: DiscoveryCursor?) {
+        val ticket = ++serial
+        refresh.isEnabled = false
+        paintButton(refresh)
+        if (cursor == null && state.loaded) {
+            rememberPosition()
+            showItems(hasMore = false)
+            setSummary("正在更新…")
+        }
+        if (!state.loaded) {
+            emptyState.heading.text = "正在加载剧目"
+            emptyState.description.text = ""
+        }
+        fetch(state.selection, cursor) { result, error ->
+            if (closed || ticket != serial) return@fetch
+            refresh.isEnabled = true
+            paintButton(refresh)
+            if (result != null && cursor == null) {
+                if (state.loaded) rememberPosition()
+                state.items = result.items
+                state.groups = result.groups
+                state.loaded = true
+                state.next = result.next
+                renderFilters()
+                showItems()
+            } else if (result != null) {
+                val seen = state.items.mapTo(HashSet()) { it.id }
+                state.items = state.items + result.items.filter { seen.add(it.id) }
+                state.next = result.next
+                browser.append(result.items, result.next != null)
+            } else if (cursor != null) {
+                browser.fail(error)
+            } else if (state.loaded) {
+                rememberPosition()
+                showItems()
+                setSummary("更新失败，请刷新重试")
+            } else {
+                emptyState.heading.text = "剧目加载失败"
+                emptyState.description.text = "点按刷新重试"
+            }
+        }
     }
 }

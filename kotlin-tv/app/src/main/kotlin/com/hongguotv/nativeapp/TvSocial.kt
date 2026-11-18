@@ -2,6 +2,7 @@
 package com.hongguotv.nativeapp
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.Dialog
 import android.graphics.*
 import android.os.Handler
@@ -41,6 +42,7 @@ class TvSocial(
     private val pages = linkedMapOf<Long, JSONObject>()
 
     private fun dp(n: Int) = (n * activity.resources.displayMetrics.density).toInt()
+    private fun danmakuFontDp() = prefs.getInt("font", 24) * 2 / 3
 
     private val tick =
         object : Runnable {
@@ -71,9 +73,9 @@ class TvSocial(
             }
         }
 
-    fun attach(root: android.widget.FrameLayout) {
+    fun attach(root: FrameLayout, videoFrame: View? = null) {
         overlay?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
-        overlay = BulletView().also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        overlay = BulletView(videoFrame).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
     }
 
     fun foreground(value: Boolean) {
@@ -157,12 +159,12 @@ class TvSocial(
         }
 
     private fun button(text: String, action: () -> Unit) =
-        label(text).apply {
+        label(text, 16f).apply {
             isFocusable = true
-            isFocusableInTouchMode = true
             minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
             background = TvStyle.card(activity, false)
-            setOnFocusChangeListener { _, focus -> background = TvStyle.card(activity, focus) }
+            setOnFocusChangeListener { _, focus -> background = TvStyle.card(activity, focus, isSelected) }
             setOnClickListener { action() }
         }
 
@@ -215,7 +217,7 @@ class TvSocial(
         option({ "弹幕：${if(prefs.getBoolean("enabled",true)) "开" else "关"}" }) {
             prefs.edit().putBoolean("enabled", !prefs.getBoolean("enabled", true)).apply()
         }
-        option({ "字号：${prefs.getInt("font",24)}" }) {
+        option({ "字号：${danmakuFontDp()}" }) {
             val n = prefs.getInt("font", 24)
             prefs.edit().putInt("font", if (n >= 32) 20 else n + 4).apply()
         }
@@ -267,10 +269,12 @@ class TvSocial(
             }.distinct().size
             val report = "弹幕诊断 D3\n$timedStatus\n缓存 ${pages.size} 段，去重 $counts 条\n" +
                 (overlay?.diagnostics() ?: "画布尚未创建")
-            android.app.AlertDialog.Builder(activity).setTitle("弹幕读取诊断")
-                .setMessage(report).setPositiveButton("关闭", null).show()
+            AlertDialog.Builder(activity).setTitle("弹幕读取诊断")
+                .setMessage(report).setPositiveButton("关闭", null).show().apply {
+                    stylePanel()
+                    window?.setLayout(activity.dialogWidth(480), -2)
+                }
         })
-        body.addView(label("真实时间轴弹幕；无内容时不使用普通评论代替。", 14f))
         body.addView(button("关闭") { d.dismiss() })
         d.setContentView(ScrollView(activity).apply { addView(body) })
         d.setOnDismissListener {
@@ -278,7 +282,10 @@ class TvSocial(
             if (anchor.isAttachedToWindow) anchor.requestFocus()
         }
         d.show()
-        d.window?.setLayout(dp(440), -2)
+        d.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(activity.dialogWidth(440), -2)
+        }
         body.getChildAt(1).requestFocus()
     }
 
@@ -300,6 +307,7 @@ class TvSocial(
         var reviewMode = false
         var disposed = false
         var pageGeneration = 0
+        var requestForDialog: RequestScope? = null
         val seen = mutableSetOf<String>()
         val cursors = mutableSetOf<String>()
         val body =
@@ -311,7 +319,10 @@ class TvSocial(
         body.addView(label("评论与剧评", 22f))
         val tabs = LinearLayout(activity)
         body.addView(tabs)
-        val status = label("匿名读取 · 点赞数量只读", 14f)
+        val status = label("", 14f).apply {
+            setTextColor(TvStyle.muted)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
         body.addView(status)
         val scroll = ScrollView(activity)
         val list = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
@@ -333,7 +344,6 @@ class TvSocial(
                 LinearLayout(activity).apply {
                     orientation = LinearLayout.VERTICAL
                     isFocusable = true
-                    isFocusableInTouchMode = true
                     setPadding(dp(12), dp(10), dp(12), dp(12))
                     background = TvStyle.card(activity, false)
                     contentDescription = "$author，$content"
@@ -348,7 +358,7 @@ class TvSocial(
                 }
             )
             card.addView(
-                label("", 20f).apply {
+                label("", 16f).apply {
                     text = emoji.render(content, textSize * 1.2f)
                     setPadding(0, 0, 0, 0)
                     setLineSpacing(dp(6).toFloat(), 1f)
@@ -356,13 +366,15 @@ class TvSocial(
             )
             card.setOnClickListener {
                 val expanded =
-                    android.app.AlertDialog.Builder(activity)
+                    AlertDialog.Builder(activity)
                         .setTitle(author)
-                        .setMessage(emoji.render(content, dp(24).toFloat()))
+                        .setMessage(emoji.render(content, dp(20).toFloat()))
                         .setPositiveButton("关闭", null)
                         .create()
                 expanded.setOnDismissListener { if (card.isAttachedToWindow) card.requestFocus() }
                 expanded.show()
+                expanded.stylePanel()
+                expanded.window?.setLayout(activity.dialogWidth(480), -2)
             }
             list.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
         }
@@ -374,6 +386,7 @@ class TvSocial(
                 val mode = reviewMode
                 val batch = pageGeneration
                 val request = RequestScope()
+                requestForDialog = request
                 commentScope = request
                 worker.submit {
                     try {
@@ -398,7 +411,9 @@ class TvSocial(
                                 val row = rows.getJSONObject(i)
                                 if (seen.add(row.getString("id"))) addRow(row)
                             }
-                            scroll.post { if (!disposed) scroll.scrollTo(0, previousScroll) }
+                            scroll.post {
+                                if (!disposed && batch == pageGeneration) scroll.scrollTo(0, previousScroll)
+                            }
                             more = !mode && page.getBoolean("hasMore")
                             if (more) {
                                 val next = page.getString("nextCursor")
@@ -422,7 +437,7 @@ class TvSocial(
                                     mode == reviewMode
                             ) {
                                 busy = false
-                                load.text = "加载失败，按确认重试"
+                                load.text = "加载失败，点此重试"
                                 status.text = "保留已有评论，重试使用原游标"
                             }
                         }
@@ -440,13 +455,20 @@ class TvSocial(
             seen.clear()
             cursors.clear()
             list.removeAllViews()
+            scroll.scrollTo(0, 0)
+            for (index in 0 until tabs.childCount) {
+                val tab = tabs.getChildAt(index) as TextView
+                tab.isSelected = index == if (mode) 1 else 0
+                tab.background = TvStyle.card(activity, tab.hasFocus(), tab.isSelected)
+                tab.setTextColor(if (tab.isSelected) TvStyle.accent else TvStyle.text)
+            }
+            status.text = ""
             read()
         }
         tabs.addView(button("本集评论") { select(false) }, LinearLayout.LayoutParams(0, -2, 1f))
         tabs.addView(button("整剧剧评") { select(true) }, LinearLayout.LayoutParams(0, -2, 1f))
         load = button("加载更多评论") { read() }
         body.addView(load)
-        body.addView(label("上下浏览，到底继续加载。发送、回复未接入。", 13f))
         body.addView(button("关闭") { d.dismiss() })
         scroll.viewTreeObserver.addOnScrollChangedListener {
             val y = scroll.scrollY
@@ -455,70 +477,51 @@ class TvSocial(
         d.setContentView(body)
         d.setOnDismissListener {
             disposed = true
-            commentScope?.cancel()
-            if (dialog === d) dialog = null
-            if (anchor.isAttachedToWindow) anchor.requestFocus()
+            requestForDialog?.cancel()
+            if (commentScope === requestForDialog) commentScope = null
+            if (dialog === d) {
+                dialog = null
+                if (anchor.isAttachedToWindow) anchor.requestFocus()
+            }
         }
         d.show()
         d.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
-            setGravity(Gravity.END)
-            setDimAmount(0f)
-            setLayout(
-                minOf(dp(500), (activity.resources.displayMetrics.widthPixels * .65).toInt()),
-                -1,
-            )
+            setGravity(Gravity.CENTER)
+            setDimAmount(.6f)
+            setLayout(activity.dialogWidth(580), (activity.resources.displayMetrics.heightPixels * .84f).toInt())
         }
         tabs.getChildAt(0).requestFocus()
-        read()
+        select(false)
     }
 
-    private inner class BulletView : View(activity) {
+    private inner class BulletView(private val videoFrame: View?) : View(activity) {
         var running = false
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.DEFAULT_BOLD }
-
-
-        /** 轨道与文本在 setRows 时算好；绘制只做坐标换算，避免每帧重新分配。 */
+        private val viewport = Rect()
+        private val overlayBounds = Rect()
+        private val overlayOffset = Point()
+        private var items: List<DanmakuItem> = emptyList()
         private var scheduled: List<ScheduledDanmaku> = emptyList()
+        private var laneCount = 0
 
-        private fun areaTop(): Int =
-            when (prefs.getString("area", "top")) {
-                "middle" -> dp(220)
-                "bottom" -> dp(420)
-                "full" -> dp(65)
-                else -> dp(65)
-            }
-
-        private fun areaHeight(): Int {
-            val top = areaTop()
-            val full = height - top
-            return when (prefs.getString("area", "top")) {
-                "middle", "bottom" -> (full * 0.6f).toInt()
-                else -> full
-            }
+        private fun updateViewport(): Boolean {
+            if (!getGlobalVisibleRect(overlayBounds, overlayOffset)) return false
+            if (videoFrame == null) viewport.set(overlayBounds)
+            else if (!videoFrame.getGlobalVisibleRect(viewport) || !viewport.intersect(overlayBounds)) return false
+            viewport.offset(-overlayOffset.x, -overlayOffset.y)
+            return true
         }
 
         fun setRows(values: List<JSONObject>) {
-            val travel = prefs.getInt("travel", 12000)
-            val textSize = dp(prefs.getInt("font", 24))
-            val configured = prefs.getInt("lanes", 0)
-            val lanes =
-                if (configured > 0) configured
-                else DanmakuLayout.laneCountFor(areaHeight(), textSize, 0)
-            val items =
-                values.mapNotNull {
-                    val text = it.optString("text").trim()
-                    val at = it.optLong("timeMS", -1)
-                    if (text.isEmpty() || at < 0) null
-                    else DanmakuItem(it.optString("id"), text, at)
-                }
-            scheduled =
-                DanmakuLayout.assign(
-                    items = items,
-                    lanes = lanes,
-                    travelMs = travel,
-                    merge = prefs.getBoolean("merge", true),
-                )
+            items = values.mapNotNull {
+                val text = it.optString("text").trim()
+                val at = it.optLong("timeMS", -1)
+                if (text.isEmpty() || at < 0) null
+                else DanmakuItem(it.optString("id"), text, at)
+            }
+            laneCount = 0
+            scheduled = emptyList()
             invalidate()
         }
 
@@ -531,23 +534,44 @@ class TvSocial(
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val p = player() ?: return
-            if (!active || !prefs.getBoolean("enabled", true)) return
+            if (!active || !prefs.getBoolean("enabled", true) || !updateViewport()) return
             val now = p.currentPosition
             val travel = prefs.getInt("travel", 12000).coerceAtLeast(1)
-            paint.textSize = dp(prefs.getInt("font", 24)).toFloat()
+            val textSize = dp(danmakuFontDp()).coerceAtLeast(1)
+            paint.textSize = textSize.toFloat()
             val alpha = (prefs.getInt("alpha", 85).coerceIn(20, 100) * 255 / 100)
-            val lineHeight = (paint.textSize + dp(12)).toInt()
-            val top = areaTop()
+            val lineHeight = (paint.fontSpacing + dp(3)).toInt().coerceAtLeast(1)
+            val third = viewport.height() / 3
+            when (prefs.getString("area", "top")) {
+                "middle" -> { viewport.top += third; viewport.bottom -= third }
+                "bottom" -> viewport.top += third * 2
+                "full" -> Unit
+                else -> viewport.bottom -= third * 2
+            }
+            val configured = prefs.getInt("lanes", 0)
+            val padding = dp(4)
+            val capacity = ((viewport.height() - padding * 2) / lineHeight).coerceAtLeast(1)
+            val lanes = minOf(
+                if (configured > 0) configured else DanmakuLayout.laneCountFor(viewport.height(), textSize, padding * 2),
+                capacity,
+            )
+            if (laneCount != lanes) {
+                laneCount = lanes
+                scheduled = DanmakuLayout.assign(items, lanes, travel, prefs.getBoolean("merge", true))
+            }
+            val baseline = viewport.top + padding - paint.ascent()
+            val saved = canvas.save()
+            canvas.clipRect(viewport)
             // 只绘制当前有效的弹幕，不因缓存总量大而按索引丢弃。
             for (item in scheduled) {
                 if (now < item.startMs || now >= item.endMs) continue
                 val x =
-                    width -
-                        (width + paint.measureText(item.text)) *
+                    viewport.right -
+                        (viewport.width() + paint.measureText(item.text)) *
                             (now - item.startMs).toFloat() / travel
-                val y = (top + item.lane * lineHeight).toFloat()
+                val y = baseline + item.lane * lineHeight
                 paint.style = Paint.Style.STROKE
-                paint.strokeWidth = dp(2).toFloat()
+                paint.strokeWidth = (textSize * .085f).coerceAtLeast(1f)
                 paint.color = Color.BLACK
                 paint.alpha = alpha
                 canvas.drawText(item.text, x, y, paint)
@@ -556,6 +580,7 @@ class TvSocial(
                 paint.alpha = alpha
                 canvas.drawText(item.text, x, y, paint)
             }
+            canvas.restoreToCount(saved)
             if (running && isAttachedToWindow) postInvalidateOnAnimation()
         }
     }

@@ -59,7 +59,8 @@ class TvSocialTest {
             assertFalse(row("精确行数").isShown)
             assertFalse(row("重新读取弹幕").isShown)
             val density = row("密度：")
-            density.requestFocus()
+            assertFalse(density.isFocusableInTouchMode)
+            density.requestFocusFromTouch()
             density.performClick()
             assertEquals("密度：多", density.text.toString())
             assertTrue(density.hasFocus())
@@ -77,7 +78,7 @@ class TvSocialTest {
             val pages = field.get(social) as MutableMap<Long, JSONObject>
             pages[0] = page
             val enabled = row("弹幕：")
-            enabled.requestFocus()
+            enabled.requestFocusFromTouch()
             enabled.performClick()
             assertTrue(dialog.isShowing)
             assertTrue(enabled.hasFocus())

@@ -19,7 +19,7 @@ import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [26], qualifiers = "w960dp-h540dp-land-mdpi")
+@Config(sdk = [26], qualifiers = "w320dp-h640dp-port-mdpi")
 @LooperMode(LooperMode.Mode.PAUSED)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 class SearchSuggestionsViewTest {
@@ -36,16 +36,11 @@ class SearchSuggestionsViewTest {
     }
 
     @Test
-    fun typingDebouncesAndChipsSearchChineseTermsWithExplicitFocusRoutes() {
+    fun typingDebouncesAndATapSubmitsTheChineseSuggestion() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
         val input = EditText(activity).apply { id = View.generateViewId() }
         val result =
-            TextView(activity).apply {
-                id = View.generateViewId()
-                isFocusable = true
-            }
-        val button =
             TextView(activity).apply {
                 id = View.generateViewId()
                 isFocusable = true
@@ -56,8 +51,7 @@ class SearchSuggestionsViewTest {
             SearchSuggestionsView(
                 activity,
                 input,
-                listOf(button),
-                { result },
+                result,
                 {
                     calls += it
                     listOf("大佬，你该出手了", "大佬快醒醒")
@@ -69,7 +63,6 @@ class SearchSuggestionsViewTest {
                 LinearLayout(activity).apply {
                     orientation = LinearLayout.VERTICAL
                     addView(input)
-                    addView(button)
                     addView(hints)
                     addView(result)
                 }
@@ -81,16 +74,17 @@ class SearchSuggestionsViewTest {
             ShadowLooper.idleMainLooper(1, TimeUnit.MILLISECONDS)
             finish(hints)
             assertEquals(listOf("dalao"), calls)
-            val first = texts(hints).first()
-            assertEquals(first.id, input.nextFocusDownId)
-            assertEquals(first.id, button.nextFocusDownId)
+            val first = hints.viewAt(0)!!
+            val second = hints.viewAt(1)!!
             assertEquals(input.id, first.nextFocusUpId)
-            assertEquals(result.id, first.nextFocusDownId)
+            assertEquals(second.id, first.nextFocusDownId)
+            assertEquals(result.id, second.nextFocusDownId)
+            assertFalse(first.isFocusableInTouchMode)
             first.performClick()
             assertEquals("大佬，你该出手了", searched)
             input.setText("")
             assertEquals(View.GONE, hints.visibility)
-            assertEquals(result.id, input.nextFocusDownId)
+            assertNull(hints.entry())
             ShadowLooper.idleMainLooper(1, TimeUnit.SECONDS)
             assertEquals(1, calls.size)
         } finally {
@@ -110,8 +104,7 @@ class SearchSuggestionsViewTest {
             SearchSuggestionsView(
                 activity,
                 input,
-                emptyList(),
-                { input },
+                input,
                 { keyword ->
                     if (keyword == "old") {
                         started.countDown()
@@ -133,12 +126,12 @@ class SearchSuggestionsViewTest {
             ShadowLooper.idleMainLooper(350, TimeUnit.MILLISECONDS)
             release.countDown()
             finish(hints)
-            assertEquals(listOf("new"), texts(hints).map { it.text.toString() })
+            assertEquals(listOf("new"), hints.values())
             input.setText("closed")
             hints.close()
             ShadowLooper.idleMainLooper(1, TimeUnit.SECONDS)
             assertEquals(View.GONE, hints.visibility)
-            assertTrue(texts(hints).isEmpty())
+            assertTrue(hints.values().isEmpty())
         } finally {
             release.countDown()
             hints.close()
@@ -147,7 +140,7 @@ class SearchSuggestionsViewTest {
     }
 
     @Test
-    fun failedSuggestionsKeepDirectSearchAndRestoreDownNavigation() {
+    fun failedSuggestionsKeepDirectSearchAvailable() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
         val input = EditText(activity).apply { id = View.generateViewId() }
@@ -156,8 +149,7 @@ class SearchSuggestionsViewTest {
             SearchSuggestionsView(
                 activity,
                 input,
-                emptyList(),
-                { result },
+                result,
                 { throw java.io.IOException("offline") },
                 { fail("automatic search") },
             )
@@ -165,8 +157,8 @@ class SearchSuggestionsViewTest {
             input.setText("测试")
             ShadowLooper.idleMainLooper(350, TimeUnit.MILLISECONDS)
             finish(hints)
-            assertTrue(texts(hints).single().text.contains("可直接按搜索"))
-            assertEquals(result.id, input.nextFocusDownId)
+            assertTrue(texts(hints).any { it.text.contains("可直接搜索") })
+            assertNull(hints.entry())
         } finally {
             hints.close()
             controller.pause().stop().destroy()

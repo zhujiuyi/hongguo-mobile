@@ -47,7 +47,7 @@ internal class ProducerWorksDialog(
             addView(ScrollView(activity).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(more)
         }
-        dialog = AlertDialog.Builder(activity).setView(panel).create()
+        dialog = AlertDialog.Builder(activity).setView(panel).setNegativeButton("关闭", null).create()
         dialog.setOnDismissListener {
             closed = true
             scope.cancel()
@@ -57,8 +57,8 @@ internal class ProducerWorksDialog(
         }
         more.setOnClickListener { loadPage() }
         dialog.show()
-        dialog.window?.setBackgroundDrawable(TvVisual.panel(activity, modal = true))
-        dialog.window?.setLayout(minOf(dp(640), (activity.resources.displayMetrics.widthPixels * .9f).toInt()),
+        dialog.stylePanel()
+        dialog.window?.setLayout(activity.dialogWidth(640),
             (activity.resources.displayMetrics.heightPixels * .85f).toInt())
         render(listOf(current))
         list.getChildAt(0)?.requestFocus()
@@ -82,7 +82,7 @@ internal class ProducerWorksDialog(
             val card = LinearLayout(activity).apply {
                 id = View.generateViewId(); tag = series.id
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                isFocusable = true; isFocusableInTouchMode = true
+                isFocusable = true
                 setPadding(dp(8), dp(6), dp(8), dp(6))
                 background = TvStyle.card(activity, false)
                 contentDescription = series.title

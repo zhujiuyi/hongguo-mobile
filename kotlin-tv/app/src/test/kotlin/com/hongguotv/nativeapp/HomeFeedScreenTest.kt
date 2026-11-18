@@ -1,7 +1,10 @@
 package com.hongguotv.nativeapp
 
 import android.app.Activity
+import android.graphics.Rect
+import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -336,6 +339,61 @@ class HomeFeedScreenTest {
             screen.close()
             controller.pause().stop().destroy()
         }
+    }
+
+    @Test
+    @Config(sdk = [26], qualifiers = "w360dp-h720dp-port-mdpi")
+    fun portraitFeedHandlesTapsAndVerticalSwipes() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState()
+        val player = Playback(activity, prefetchEnabled = false)
+        var opened = ""
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), { opened = it.id },
+            { _, _ -> }, { "收藏" }, Backend(), player)
+        try {
+            activity.setContentView(screen)
+            screen.start(true, false)
+            pump(screen)
+            screen.measure(View.MeasureSpec.makeMeasureSpec(360, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY))
+            screen.layout(0, 0, 360, 640)
+            val stage = get(screen, "stage") as View
+            val info = get(screen, "info") as View
+            val watchAll = texts(screen).first { it.text == "播放全集" }
+            assertTrue(stage.bottom <= info.top)
+            assertFalse(watchAll.isFocusableInTouchMode)
+
+            fun gesture(target: View, dy: Float = 0f) {
+                val bounds = Rect().also(target::getDrawingRect)
+                screen.offsetDescendantRectToMyCoords(target, bounds)
+                val downTime = SystemClock.uptimeMillis()
+                fun touch(action: Int, offset: Float, elapsed: Long) {
+                    val event = MotionEvent.obtain(downTime, downTime + elapsed, action,
+                        bounds.exactCenterX(), bounds.exactCenterY() + offset, 0)
+                    try { assertTrue(screen.dispatchTouchEvent(event)) } finally { event.recycle() }
+                }
+                touch(MotionEvent.ACTION_DOWN, 0f, 0L)
+                if (dy != 0f) touch(MotionEvent.ACTION_MOVE, dy / 2, 60L)
+                touch(MotionEvent.ACTION_UP, dy, 120L)
+                ShadowLooper.idleMainLooper()
+            }
+
+            assertTrue(player.playing)
+            gesture(stage)
+            assertFalse(player.playing)
+            gesture(stage)
+            assertTrue(player.playing)
+            gesture(stage, dy = -90f)
+            pump(screen)
+            assertEquals("2", state.current?.id)
+            gesture(stage, dy = 90f)
+            pump(screen)
+            assertEquals("1", state.current?.id)
+            gesture(watchAll)
+            assertEquals("1", opened)
+            assertFalse(player.playing)
+        } finally { screen.close(); controller.pause().stop().destroy() }
     }
 
     @Test fun watchingPersistsOnlyReadyPlaybackAndRestoresExactEpisode() {

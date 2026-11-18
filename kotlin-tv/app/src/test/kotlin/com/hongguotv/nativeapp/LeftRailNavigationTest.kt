@@ -32,105 +32,7 @@ class LeftRailNavigationTest {
     private fun views(view: View): List<View> = listOf(view) +
         if (view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList()
 
-    @Test fun upReachesSecondaryMenuThenRailAndLeftStillOpensRail() {
-        val controller = Robolectric.buildActivity(Activity::class.java).setup()
-        val activity = controller.get()
-        val shell = CatalogShell(activity) {}.apply { select(1) }
-        fun control(label: String) = TextView(activity).apply {
-            id = View.generateViewId(); text = label; isFocusable = true
-        }
-        val filters = android.widget.LinearLayout(activity)
-        val first = control("类型")
-        val second = control("排序")
-        filters.addView(first, android.widget.LinearLayout.LayoutParams(120, 40))
-        filters.addView(second, android.widget.LinearLayout.LayoutParams(120, 40))
-        shell.body.addView(filters)
-        val card = control("作品")
-        shell.body.addView(card, android.widget.LinearLayout.LayoutParams(240, 180))
-        // Reproduce legacy links that pointed above the page into the old navigation.
-        first.nextFocusUpId = shell.navigation[1].id
-        second.nextFocusUpId = shell.navigation[1].id
-        card.nextFocusUpId = shell.navigation[1].id
-        first.nextFocusRightId = second.id
-        second.nextFocusDownId = card.id
-        card.nextFocusLeftId = shell.navigation[1].id
-        fun key(code: Int) {
-            val handled = shell.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
-            // Direct dispatch has no ViewRootImpl traversal in Robolectric.
-            if (!handled) {
-                val direction = when(code) {
-                    KeyEvent.KEYCODE_DPAD_UP -> View.FOCUS_UP
-                    KeyEvent.KEYCODE_DPAD_DOWN -> View.FOCUS_DOWN
-                    KeyEvent.KEYCODE_DPAD_LEFT -> View.FOCUS_LEFT
-                    else -> View.FOCUS_RIGHT
-                }
-                shell.findFocus()?.focusSearch(direction)?.requestFocus()
-            }
-        }
-        try {
-            activity.setContentView(shell); layout(shell)
-            card.requestFocus()
-            key(KeyEvent.KEYCODE_DPAD_UP)
-            assertTrue(first.hasFocus() || second.hasFocus())
-            key(KeyEvent.KEYCODE_DPAD_UP)
-            assertTrue(shell.navigation[1].hasFocus())
-            first.requestFocus()
-            key(KeyEvent.KEYCODE_DPAD_RIGHT)
-            assertTrue(second.hasFocus())
-            key(KeyEvent.KEYCODE_DPAD_DOWN)
-            assertTrue(card.hasFocus())
-            key(KeyEvent.KEYCODE_DPAD_LEFT)
-            assertTrue(shell.navigation[1].hasFocus())
-            key(KeyEvent.KEYCODE_DPAD_RIGHT)
-            assertTrue(card.hasFocus())
-            shell.navigation[0].requestFocus()
-            key(KeyEvent.KEYCODE_DPAD_DOWN)
-            assertTrue(shell.navigation[8].hasFocus())
-            assertEquals("随心看", shell.navigation[8].text.toString())
-        } finally { controller.pause().stop().destroy() }
-    }
-
-    @Test fun gridRailRoundTripPreservesSelectionAndDoesNotSwitchOnFocus() {
-        val controller = Robolectric.buildActivity(Activity::class.java).setup()
-        val activity = controller.get()
-        val navigated = mutableListOf<Int>()
-        val shell = CatalogShell(activity) { navigated += it }.apply { select(1) }
-        val upper = TextView(activity).apply { id = View.generateViewId(); isFocusable = true; text = "全部" }
-        shell.body.addView(upper)
-        val browser = ContinuousCatalogView(activity, 5, upper,
-            { item, reused -> (reused as? CatalogPosterCard ?: CatalogPosterCard(activity)).apply { show(item) } },
-            {}, {}, { _, _ -> }, {})
-        shell.body.addView(browser, android.widget.LinearLayout.LayoutParams(-1, 0, 1f))
-        browser.setSideEntry(shell.navigation[1])
-        try {
-            activity.setContentView(shell)
-            browser.show((1..40).map { Series("$it", "作品 $it") }, false)
-            browser.enter()
-            layout(shell)
-            browser.grid.setSelection(10)
-            layout(shell)
-            assertEquals("11", browser.capture()?.id)
-            shell.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT))
-            assertTrue(shell.navigation[1].hasFocus())
-            val contentLeft = shell.body.left
-            shell.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
-            assertTrue(shell.navigation[7].hasFocus())
-            assertTrue(navigated.isEmpty())
-            shell.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT))
-            assertTrue(browser.grid.hasFocus())
-            assertEquals("11", browser.capture()?.id)
-            assertEquals(contentLeft, shell.body.left)
-            shell.navigation[1].requestFocus()
-            assertFalse(shell.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK)))
-            assertTrue(shell.hasNavigationFocus)
-            assertTrue(shell.navigation[1].hasFocus())
-            assertEquals("11", browser.capture()?.id)
-            shell.navigation[2].performClick()
-            assertEquals(listOf(2), navigated)
-        } finally { browser.close(); controller.pause().stop().destroy() }
-    }
-
-    @Test fun enteringSettingsAlwaysStartsAtUpdateAction() {
+    @Test fun settingsKeepsTheChosenCategoryWhenReturning() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).create()
         val activity = controller.get()
         fun field(name: String) = activity.javaClass.getDeclaredField(name).apply { isAccessible = true }
@@ -140,21 +42,19 @@ class LeftRailNavigationTest {
             (loader.get(library) as java.util.concurrent.ExecutorService).submit {}.get(5, java.util.concurrent.TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper()
             val switch = activity.javaClass.getDeclaredMethod("switchTab", Int::class.javaPrimitiveType).apply { isAccessible = true }
-            repeat(2) {
-                field("settingsGroup").setInt(activity, 2)
-                switch.invoke(activity, 6)
-                layout(activity.window.decorView)
-                assertEquals(0, field("settingsGroup").getInt(activity))
-                assertEquals("检查更新", ((field("root").get(activity) as View).findFocus() as TextView).text.toString())
-                val labels = views(field("root").get(activity) as View).filterIsInstance<TextView>()
-                assertTrue(labels.any { it.text.toString().startsWith("当前版本") })
-                val shell = field("catalogShell").get(activity) as CatalogShell
-                assertFalse(views(shell.getChildAt(0)).filterIsInstance<TextView>().any { it.text == "检查更新" })
-            }
+            switch.invoke(activity, 6)
+            assertEquals(0, field("settingsGroup").getInt(activity))
+            val shell = field("catalogShell").get(activity) as CatalogShell
+            shell.body.findViewWithTag<View>("settings-category-3").performClick()
+            switch.invoke(activity, 3)
+            shell.navigation[6].performClick()
+            layout(activity.window.decorView)
+            assertEquals(3, field("settingsGroup").getInt(activity))
+            assertTrue(views(shell.body).filterIsInstance<TextView>().any { it.isClickable && it.text == "关于红果手机版" })
         } finally { controller.destroy() }
     }
 
-    @Test fun everyPrimaryDestinationBackConfirmsExitAndCancelKeepsFocus() {
+    @Test fun systemBackReturnsFromSettingsToHomeAndThenFinishes() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).create()
         val activity = controller.get()
         fun field(target: Any, name: String) = target.javaClass.getDeclaredField(name).apply { isAccessible = true }
@@ -163,55 +63,23 @@ class LeftRailNavigationTest {
             (field(library, "loader").get(library) as java.util.concurrent.ExecutorService)
                 .submit {}.get(5, java.util.concurrent.TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper()
-            val shell = CatalogShell(activity) {}
-            activity.setContentView(shell)
-            field(activity, "catalogShell").set(activity, shell)
-            field(activity, "screen").set(activity, "catalog")
-            @Suppress("UNCHECKED_CAST")
-            val nav = field(activity, "nav").get(activity) as MutableList<View>
-            nav.clear(); nav.addAll(shell.navigation)
-            val content = TextView(activity).apply { isFocusable = true; text = "内容" }
-            shell.body.addView(content)
-            layout(shell)
-            fun back() {
-                activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
-                activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
-                ShadowLooper.idleMainLooper()
-            }
-            for (tab in listOf(0, 8, 1, 7, 2, 3, 6)) {
-                field(activity, "tab").setInt(activity, tab)
-                shell.select(tab)
-                shell.navigation[tab].requestFocus()
-                back()
-                val dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
-                assertTrue("Exit confirmation for destination $tab", dialog.isShowing)
-                assertFalse(activity.isFinishing)
-                dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick()
-                ShadowLooper.idleMainLooper()
-                assertTrue("Cancel retains destination $tab", shell.navigation[tab].hasFocus())
-                assertEquals(tab, field(activity, "tab").getInt(activity))
-            }
-            shell.navigation[6].requestFocus()
-            shell.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP))
-            assertEquals("扫码", (shell.findFocus() as TextView).text.toString())
-            back()
-            val dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
-            assertTrue(dialog.isShowing)
-            dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick()
-            field(activity, "tab").setInt(activity, 0)
-            content.requestFocus()
-            back()
-            assertTrue("Home content returns to primary navigation first", shell.navigation[0].hasFocus())
-            assertFalse(dialog.isShowing)
-            back()
-            org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
-                .getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
-            ShadowLooper.idleMainLooper()
+            field(activity, "repository").set(activity, com.hongguotv.core.ContentRepository(
+                okhttp3.OkHttpClient.Builder().addInterceptor { throw java.io.IOException("offline fixture") }.build()))
+            activity.javaClass.getDeclaredMethod("switchTab", Int::class.javaPrimitiveType).apply { isAccessible = true }
+                .invoke(activity, 6)
+            val shell = field(activity, "catalogShell").get(activity) as CatalogShell
+            assertTrue(shell.navigation[6].isSelected)
+            @Suppress("DEPRECATION")
+            activity.onBackPressed()
+            assertTrue(shell.navigation[0].isSelected)
+            assertFalse(activity.isFinishing)
+            @Suppress("DEPRECATION")
+            activity.onBackPressed()
             assertTrue(activity.isFinishing)
         } finally { controller.destroy() }
     }
 
-    @Test fun moreHotRetainsReturnButtonAfterFailureAndBackRestoresHomeEvenFromRail() {
+    @Test fun moreHotRetainsItsReturnButtonAndSystemBackRestoresHome() {
         val controller = Robolectric.buildActivity(MainActivity::class.java).create()
         val activity = controller.get()
         fun field(target: Any, name: String) = target.javaClass.getDeclaredField(name).apply { isAccessible = true }
@@ -253,7 +121,7 @@ class LeftRailNavigationTest {
             assertEquals(1, field(activity, "page").getInt(activity))
             assertEquals(homeItems, field(activity, "catalog").get(activity))
             assertNull(field(activity, "collection").get(activity))
-            assertTrue("Home retains the More focus", more().hasFocus())
+            assertTrue(more().isClickable && more().visibility == View.VISIBLE)
             more().performClick()
             (field(activity, "workJob").get(activity) as? java.util.concurrent.Future<*>)?.get(5, java.util.concurrent.TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper()

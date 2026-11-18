@@ -1,6 +1,7 @@
 package com.hongguotv.nativeapp
 
 import android.app.Activity
+import android.view.View
 import android.widget.TextView
 import org.junit.Assert.*
 import org.junit.Test
@@ -10,98 +11,61 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [21, 26], qualifiers = "w960dp-h540dp-land-mdpi")
+@Config(sdk = [21, 26], qualifiers = "w320dp-h640dp-port-mdpi")
 class CatalogShellTest {
-    @Test fun upAtContentTopReturnsToSelectedColumnAndRightRestoresPosition() {
+    @Test
+    fun fiveTouchDestinationsFitTheBottomAndShortcutsStayReachable() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
-        var navigated = -1
-        val shell = CatalogShell(controller.get()) { navigated = it }
+        val destinations = mutableListOf<Int>()
+        val shell = CatalogShell(controller.get()) { destinations += it }
         try {
             controller.get().setContentView(shell)
-            shell.select(2)
-            val content = TextView(controller.get()).apply {
-                isFocusable = true
-                id = android.view.View.generateViewId()
-                nextFocusUpId = id
+            layout(shell)
+            val tabs = listOf(0, 1, 7, 2, 3).map { shell.navigation[it] }
+            val bar = tabs.first().parent as View
+            assertEquals(shell.height, bar.bottom)
+            assertTrue(shell.body.bottom <= bar.top)
+            assertEquals(listOf("首页", "找剧", "搜索", "排行榜", "我的"), tabs.map { it.text.toString() })
+            assertTrue(tabs.all { it.parent === bar && it.width >= 48 && it.height >= 48 && !it.isFocusableInTouchMode })
+            assertTrue(tabs.zipWithNext().all { (left, right) -> left.right <= right.left })
+            listOf(1, 7, 2, 3, 8, 6).forEach {
+                val control = shell.navigation[it]
+                assertTrue(control.isShown && !control.isFocusableInTouchMode)
+                assertTrue(control.performClick())
             }
-            shell.body.addView(content)
-            shell.measure(android.view.View.MeasureSpec.makeMeasureSpec(960, android.view.View.MeasureSpec.EXACTLY), android.view.View.MeasureSpec.makeMeasureSpec(540, android.view.View.MeasureSpec.EXACTLY))
-            shell.layout(0, 0, 960, 540)
-            content.requestFocus()
-            fun key(code: Int) { shell.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code)) }
-            key(android.view.KeyEvent.KEYCODE_DPAD_UP)
-            assertTrue(shell.navigation[2].hasFocus())
-            key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
-            assertTrue(content.hasFocus())
-            key(android.view.KeyEvent.KEYCODE_DPAD_UP)
-            key(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
-            assertEquals(-1, navigated)
-        } finally { controller.pause().stop().destroy() }
+            assertEquals(listOf(1, 7, 2, 3, 8, 6), destinations)
+        } finally {
+            controller.pause().stop().destroy()
+        }
     }
 
     @Test
-    @Config(qualifiers = "w640dp-h360dp-land-mdpi")
-    fun compactRailKeepsSettingsAndScanVisible() {
+    fun personalSubpagesKeepOneSelectedTabAcrossRebuildingTheBody() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val shell = CatalogShell(controller.get()) {}
         try {
             controller.get().setContentView(shell)
-            shell.measure(android.view.View.MeasureSpec.makeMeasureSpec(640, android.view.View.MeasureSpec.EXACTLY), android.view.View.MeasureSpec.makeMeasureSpec(360, android.view.View.MeasureSpec.EXACTLY))
-            shell.layout(0, 0, 640, 360)
-            val settings = shell.navigation[6]
-            assertTrue(settings.bottom <= 360)
-            settings.requestFocus()
-            shell.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_UP))
-            assertEquals("扫码", (shell.findFocus() as TextView).text.toString())
-            assertTrue(shell.findFocus().bottom <= settings.top)
-        } finally { controller.pause().stop().destroy() }
-    }
-
-    @Test fun scanAboveSettingsOpensPhoneControlWithoutChangingSelectedPage() {
-        val controller = Robolectric.buildActivity(Activity::class.java).setup()
-        var anchor: android.view.View? = null
-        var navigated = -1
-        val shell = CatalogShell(controller.get(), phone = { anchor = it }) { navigated = it }
-        try {
-            controller.get().setContentView(shell)
-            shell.select(7)
-            shell.navigation[6].requestFocus()
-            shell.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_UP))
-            val scan = shell.findFocus() as TextView
-            assertEquals("扫码", scan.text.toString())
-            scan.performClick()
-            assertSame(scan, anchor)
-            assertEquals(-1, navigated)
-            assertTrue(shell.navigation[7].isSelected)
-            shell.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_DOWN))
-            assertTrue(shell.navigation[6].hasFocus())
-        } finally { controller.pause().stop().destroy() }
-    }
-
-    @Test fun switchingBodyPreservesNavigationIdentityFocusAndSharedSelectionStyle() {
-        val activity = Robolectric.buildActivity(Activity::class.java).setup()
-        var selected = -1
-        val shell = CatalogShell(activity.get()) { selected = it }
-        try {
-            activity.get().setContentView(shell)
-            shell.body.addView(TextView(activity.get()).apply { text = "首页内容" })
-            val top = shell.getChildAt(0)
-            assertNotSame("Discovery and search remain independent destinations", shell.navigation[1], shell.navigation[7])
-            assertEquals("找剧", shell.navigation[1].text.toString())
-            assertEquals("搜索", shell.navigation[7].text.toString())
-            val tab = shell.navigation[2]
+            val personal = shell.navigation[3]
             val ids = shell.navigation.map { it.id }
-            tab.requestFocus(); tab.performClick()
-            assertEquals(2, selected)
-            shell.clearBody(); shell.select(2)
-            shell.body.addView(TextView(activity.get()).apply { text = "排行榜内容" })
-            assertSame(top, shell.getChildAt(0))
-            assertSame(tab, shell.navigation[2])
+            shell.body.addView(TextView(controller.get()).apply { text = "首页" })
+            shell.clearBody()
+            shell.select(5)
+            assertEquals(0, shell.body.childCount)
             assertEquals(ids, shell.navigation.map { it.id })
-            assertTrue(tab.hasFocus())
-            assertTrue(tab.isSelected)
-            assertEquals(TvStyle.background, tab.currentTextColor)
+            assertSame(personal, shell.navigation[4])
+            assertSame(personal, shell.navigation[5])
+            assertTrue(personal.isSelected)
             assertFalse(shell.navigation[0].isSelected)
-        } finally { activity.pause().stop().destroy() }
+        } finally {
+            controller.pause().stop().destroy()
+        }
+    }
+
+    private fun layout(view: View) {
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 640)
     }
 }

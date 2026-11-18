@@ -3,6 +3,8 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -21,6 +23,31 @@ import com.hongguotv.core.LibraryTransferServer
 import com.hongguotv.core.PhoneSearchServer
 import java.net.Inet4Address
 import java.util.concurrent.Executors
+
+internal fun Context.dialogWidth(maxWidthDp: Int): Int {
+    val metrics = resources.displayMetrics
+    val screenWidthDp = resources.configuration.screenWidthDp
+    val width = if (screenWidthDp > 0) (screenWidthDp * metrics.density).toInt() else metrics.widthPixels
+    return minOf((maxWidthDp * metrics.density).toInt(), (width - (32 * metrics.density).toInt()).coerceAtLeast(1))
+}
+
+internal fun AlertDialog.stylePanel() {
+    findViewById<TextView>(android.R.id.message)?.setTextColor(TvStyle.text)
+    val titleId = context.resources.getIdentifier("alertTitle", "id", "android")
+    if (titleId != 0) findViewById<TextView>(titleId)?.setTextColor(TvStyle.text)
+    listOf(AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL)
+        .forEach { which ->
+            getButton(which)?.apply {
+                setTextColor(TvStyle.text)
+                backgroundTintList = ColorStateList(
+                    arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                    intArrayOf(TvStyle.raised, TvStyle.surface),
+                )
+            }
+        }
+    window?.setBackgroundDrawable(TvVisual.panel(context, modal = true))
+    window?.setDimAmount(.6f)
+}
 
 /** Native modal controls kept separate from catalog/player navigation. */
 class TvTools(private val activity: Activity) {
@@ -64,22 +91,8 @@ class TvTools(private val activity: Activity) {
             }
         }
         next.show()
-        // Framework dialog labels otherwise retain the fixed dark XML theme.
-        next.findViewById<TextView>(android.R.id.message)?.setTextColor(TvStyle.text)
-        val titleId = activity.resources.getIdentifier("alertTitle", "id", "android")
-        if (titleId != 0) next.findViewById<TextView>(titleId)?.setTextColor(TvStyle.text)
-        listOf(AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL)
-            .forEach { which ->
-                next.getButton(which)?.apply {
-                    setTextColor(TvStyle.text)
-                    backgroundTintList = android.content.res.ColorStateList(
-                        arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
-                        intArrayOf(TvStyle.raised, TvStyle.surface),
-                    )
-                }
-            }
-        next.window?.setBackgroundDrawable(TvVisual.panel(activity, modal = true))
-        next.window?.setDimAmount(.6f)
+        next.stylePanel()
+        next.window?.setLayout(activity.dialogWidth(560), -2)
     }
 
     internal fun dispatchPhoneKey(event: android.view.KeyEvent): Boolean {
@@ -154,13 +167,23 @@ class TvTools(private val activity: Activity) {
         content.addView(scroll)
         val choices = mutableListOf<View>()
         lateinit var next: AlertDialog
+        val cancel = Button(activity).apply {
+            id = View.generateViewId()
+            text = if (onBack == null) "关闭" else "返回"
+            setTextColor(TvStyle.text)
+            backgroundTintList = ColorStateList.valueOf(TvStyle.raised)
+            minHeight = dp(48)
+            setOnClickListener {
+                next.dismiss()
+                if (onBack != null) main.post { onBack() }
+            }
+        }
         fun choice(value: String, checked: Boolean, action: () -> Unit) {
             val row = LinearLayout(activity).apply {
                 id = View.generateViewId()
                 tag = "choice-${choices.size}"
                 gravity = Gravity.CENTER_VERTICAL
                 isFocusable = true
-                isFocusableInTouchMode = true
                 isClickable = true
                 minimumHeight = dp(48)
                 setPadding(dp(14), dp(10), dp(14), dp(10))
@@ -197,26 +220,18 @@ class TvTools(private val activity: Activity) {
         if (extra != null) choice(extra, false, onExtra)
         choices.forEachIndexed { index, view ->
             view.nextFocusUpId = choices[maxOf(0, index - 1)].id
-            view.nextFocusDownId = choices[minOf(choices.lastIndex, index + 1)].id
+            view.nextFocusDownId = choices.getOrNull(index + 1)?.id ?: cancel.id
             view.nextFocusLeftId = view.id
             view.nextFocusRightId = view.id
         }
-        content.addView(label("确定选择 · 返回取消", 12f).apply {
-            setTextColor(TvStyle.muted)
-            setPadding(dp(8), dp(8), dp(8), 0)
-        })
+        cancel.nextFocusUpId = choices.last().id
+        content.addView(cancel, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END })
         next = AlertDialog.Builder(activity).create()
         next.setView(content, 0, 0, 0, 0)
+        if (onBack != null) next.setOnCancelListener { main.post { onBack() } }
         open(next, anchor)
-        if (onBack != null) next.setOnKeyListener { _, key, event ->
-            if (key == KeyEvent.KEYCODE_BACK) {
-                if (event.action == KeyEvent.ACTION_UP) { next.dismiss(); main.post { onBack() } }
-                true
-            } else false
-        }
         next.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-        next.window?.setDimAmount(.6f)
-        val width = minOf(dp(if (compact) 440 else 480), (activity.resources.displayMetrics.widthPixels * .82f).toInt())
+        val width = activity.dialogWidth(if (compact) 440 else 480)
         content.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
         val height = minOf(content.measuredHeight, (activity.resources.displayMetrics.heightPixels * .84f).toInt())
@@ -234,28 +249,28 @@ class TvTools(private val activity: Activity) {
         anchor: View?,
         onChoice: (Int) -> Unit,
     ) {
-        val content = column()
-        val scroll = android.widget.ScrollView(activity)
-        val list = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(list)
-        content.addView(scroll)
-        val choices = mutableListOf<android.widget.TextView>()
+        val width = activity.dialogWidth(680)
+        val columns = ((width - dp(32)) / dp(116)).coerceIn(1, 4)
+        val list = column()
+        val scroll = ScrollView(activity).apply { addView(list) }
+        val choices = mutableListOf<TextView>()
         lateinit var next: AlertDialog
-        labels.chunked(4).forEachIndexed { rowIndex, values ->
-            val row = LinearLayout(activity)
+        labels.chunked(columns).forEachIndexed { rowIndex, values ->
+            val row = LinearLayout(activity).apply { isBaselineAligned = false }
             values.forEachIndexed { col, value ->
-                val index = rowIndex * 4 + col
+                val index = rowIndex * columns + col
                 val choice =
-                    android.widget.TextView(activity).apply {
+                    TextView(activity).apply {
                         id = View.generateViewId()
                         text = value
                         textSize = 15f
                         gravity = android.view.Gravity.CENTER
                         isFocusable = true
                         isClickable = true
-                        maxLines = 1
+                        minimumHeight = dp(48)
+                        maxLines = 2
                         ellipsize = android.text.TextUtils.TruncateAt.END
-                        setPadding(dp(10), dp(10), dp(10), dp(10))
+                        setPadding(dp(6), dp(6), dp(6), dp(6))
                         contentDescription = value
                         fun paint(focused: Boolean) {
                             setTextColor(if (index == selected) TvStyle.accent else TvStyle.text)
@@ -270,37 +285,36 @@ class TvTools(private val activity: Activity) {
                     }
                 row.addView(
                     choice,
-                    LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+                    LinearLayout.LayoutParams(0, -1, 1f).apply {
                         setMargins(dp(4), dp(4), dp(4), dp(4))
                     },
                 )
                 choices += choice
             }
-            repeat(4 - values.size) {
-                row.addView(View(activity), LinearLayout.LayoutParams(0, dp(46), 1f))
+            repeat(columns - values.size) {
+                row.addView(Space(activity), LinearLayout.LayoutParams(0, -1, 1f).apply {
+                    setMargins(dp(4), dp(4), dp(4), dp(4))
+                })
             }
             list.addView(row)
         }
         choices.forEachIndexed { i, v ->
-            v.nextFocusLeftId = if (i % 4 == 0) v.id else choices[i - 1].id
+            v.nextFocusLeftId = if (i % columns == 0) v.id else choices[i - 1].id
             v.nextFocusRightId =
-                if (i % 4 == 3 || i == choices.lastIndex) v.id else choices[i + 1].id
-            v.nextFocusUpId = choices.getOrNull(i - 4)?.id ?: v.id
+                if (i % columns == columns - 1 || i == choices.lastIndex) v.id else choices[i + 1].id
+            v.nextFocusUpId = choices.getOrNull(i - columns)?.id ?: v.id
             v.nextFocusDownId =
-                choices.getOrNull(i + 4)?.id
-                    ?: if (i / 4 < choices.lastIndex / 4) choices.last().id else v.id
+                choices.getOrNull(i + columns)?.id
+                    ?: if (i / columns < choices.lastIndex / columns) choices.last().id else View.NO_ID
         }
         next =
             AlertDialog.Builder(activity)
                 .setTitle(title)
-                .setView(content)
+                .setView(scroll)
                 .setNegativeButton("返回", null)
                 .create()
         open(next, anchor)
-        next.window?.setLayout(
-            (activity.resources.displayMetrics.widthPixels * .85f).toInt(),
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-        )
+        next.window?.setLayout(width, -2)
         choices.getOrNull(selected.coerceAtLeast(0))?.requestFocus()
     }
 
@@ -310,18 +324,22 @@ class TvTools(private val activity: Activity) {
         var replace = true
         val value = label(digits, 28f).apply { gravity = Gravity.CENTER }
         content.addView(value)
-        val error = label("输入集数后，选择「播放此集」", 14f)
+        val error = label("", 14f).apply {
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            visibility = View.GONE
+        }
         content.addView(error)
         fun digit(key: String) {
             digits = if (replace) key else (digits + key).take(6)
             replace = false
             value.text = digits
-            error.text = "输入集数后，选择「播放此集」"
+            error.visibility = View.GONE
         }
         fun erase() {
             digits = if (replace) "" else digits.dropLast(1)
             replace = false
             value.text = digits.ifEmpty { "—" }
+            error.visibility = View.GONE
         }
         val buttons = mutableListOf<Button>()
         listOf(
@@ -338,7 +356,7 @@ class TvTools(private val activity: Activity) {
                             id = View.generateViewId()
                             text = key
                             setTextColor(TvStyle.text)
-                            minHeight = dp(42)
+                            minHeight = dp(48)
                             backgroundTintList =
                                 android.content.res.ColorStateList(
                                     arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
@@ -350,6 +368,7 @@ class TvTools(private val activity: Activity) {
                                         digits = ""
                                         replace = false
                                         value.text = "—"
+                                        error.visibility = View.GONE
                                     }
                                     "退格" -> erase()
                                     else -> digit(key)
@@ -395,7 +414,10 @@ class TvTools(private val activity: Activity) {
         cancel.nextFocusUpId = buttons[9].id
         next.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val target = EpisodeTarget.parse(digits, count)
-            if (target == null) error.text = "请输入 1—$count 之间的集数"
+            if (target == null) {
+                error.text = "请输入 1—$count 之间的集数"
+                error.visibility = View.VISIBLE
+            }
             else {
                 next.dismiss()
                 select(target)
@@ -415,15 +437,33 @@ class TvTools(private val activity: Activity) {
             contentDescription = "二维码"
         }
 
+    private fun qrDetails(url: String, message: String): LinearLayout {
+        val width = activity.dialogWidth(560)
+        val stacked = width < dp(420)
+        val size = minOf(dp(185), (width - dp(48)).coerceAtLeast(1))
+        val instructions = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(label(message, 16f))
+            addView(label(url, 12f))
+        }
+        return LinearLayout(activity).apply {
+            orientation = if (stacked) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+            gravity = if (stacked) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+            addView(qr(url), LinearLayout.LayoutParams(size, size))
+            addView(
+                instructions,
+                if (stacked) LinearLayout.LayoutParams(-1, -2)
+                else LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(8) },
+            )
+        }
+    }
+
     fun phoneConsole(url: String, anchor: View?, disconnect: () -> Unit) {
-        val content = column()
-        val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
-        row.addView(qr(url), LinearLayout.LayoutParams(dp(185), dp(185)))
-        row.addView(label("手机与电视连接同一局域网，扫码后用浏览器打开。\n可以搜索剧名、遥控播放、管理片单。\n关闭此窗口后仍可控制，播放中也能使用。\n电视退出应用后连接失效；请勿分享二维码。", 16f), LinearLayout.LayoutParams(0, -2, 1f))
-        content.addView(row)
-        content.addView(label(url, 12f))
+        val content = column().apply {
+            addView(qrDetails(url, "在同一局域网的另一台设备扫码，用浏览器搜索剧名、遥控播放或管理片单。退出应用后连接失效，请勿分享二维码。"))
+        }
         open(AlertDialog.Builder(activity).setTitle("手机扫码控制")
-            .setView(content).setPositiveButton("继续看电视", null)
+            .setView(ScrollView(activity).apply { addView(content) }).setPositiveButton("关闭", null)
             .setNegativeButton("断开所有手机") { _, _ -> disconnect() }.create(), anchor)
     }
 
@@ -445,7 +485,7 @@ class TvTools(private val activity: Activity) {
                 }
                 .getOrDefault(emptyList())
         if (addresses.isEmpty()) {
-            info("手机输入", "未找到可用的 Wi-Fi 或网线局域网地址。请检查电视网络；手机和电视需要在可互通的局域网内。", anchor)
+            info("局域网输入", "未找到可用的局域网地址。请确认本机与用于输入的设备处于可互通的局域网。", anchor)
             return
         }
         showPhoneInput(
@@ -474,7 +514,7 @@ class TvTools(private val activity: Activity) {
         val builder =
             AlertDialog.Builder(activity)
                 .setTitle(inputTitle)
-                .setView(content)
+                .setView(ScrollView(activity).apply { addView(content) })
                 .setNegativeButton("关闭", null)
                 .setPositiveButton("连接帮助", null)
         if (addresses.size > 1) builder.setNeutralButton("切换地址", null)
@@ -501,7 +541,7 @@ class TvTools(private val activity: Activity) {
         if (addresses.size > 1)
             next.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 choose(
-                    "选择电视网络地址",
+                    "选择本机网络地址",
                     addresses.map { "${it.label} · ${it.address}" },
                     anchor,
                     { chosen ->
@@ -513,7 +553,7 @@ class TvTools(private val activity: Activity) {
                     },
                 )
             }
-                worker.execute {
+        worker.execute {
             try {
                 val session =
                     PhoneSearchServer(
@@ -543,18 +583,12 @@ class TvTools(private val activity: Activity) {
                     }
                     phone = session
                     content.removeAllViews()
-                    val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url), LinearLayout.LayoutParams(dp(185), dp(185)))
-                    val instructions = column()
-                    instructions.addView(
-                        label(
+                    content.addView(
+                        qrDetails(
+                            session.url,
                             "${selected.label} · ${selected.address}\n手机扫码后，用浏览器打开并提交。\n需要同一局域网；二维码有效 5 分钟。",
-                            16f,
                         )
                     )
-                    instructions.addView(label(session.url, 12f))
-                    row.addView(instructions, LinearLayout.LayoutParams(0, -2, 1f))
-                    content.addView(row)
                     status.text = "等待手机连接…"
                     content.addView(status)
                 }
@@ -567,7 +601,7 @@ class TvTools(private val activity: Activity) {
     fun libraryTransfer(backup: String, anchor: View?, restore: (BackupData, Boolean) -> Unit) {
         val address = NetworkCompat.lanAddress(NetworkCompat.manager(activity))
         if (address == null) {
-            info("备份与恢复", "请让电视和手机连接同一局域网后重试。", anchor)
+            info("备份与恢复", "请将本机与用于传输备份的设备连接到同一局域网后重试。", anchor)
             return
         }
         val content = column()
@@ -632,15 +666,12 @@ class TvTools(private val activity: Activity) {
                     }
                     phone = session
                     content.removeAllViews()
-                    val row = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
-                    row.addView(qr(session.url), LinearLayout.LayoutParams(dp(185), dp(185)))
-                    val instructions = column()
-                    instructions.addView(
-                        label("手机扫码，用浏览器下载备份或选择备份文件恢复。\n仅限同一局域网；关闭即失效，最长 5 分钟。恢复需在电视确认。", 16f)
+                    content.addView(
+                        qrDetails(
+                            session.url,
+                            "在同一局域网扫码后，用浏览器下载备份或上传文件恢复。二维码有效 5 分钟，关闭后失效。恢复需在本机确认。",
+                        )
                     )
-                    instructions.addView(label(session.url, 12f))
-                    row.addView(instructions, LinearLayout.LayoutParams(0, -2, 1f))
-                    content.addView(row)
                 }
             } catch (_: Exception) {
                 main.post { if (dialog === next) status.text = "无法开启备份传输，请检查网络后重试。" }

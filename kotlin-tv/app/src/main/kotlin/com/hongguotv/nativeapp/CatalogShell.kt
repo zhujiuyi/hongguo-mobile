@@ -2,89 +2,118 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
-import android.view.KeyEvent
+import android.graphics.Typeface
+import android.graphics.drawable.RippleDrawable
+import android.text.TextUtils
+import android.view.Gravity
 import android.view.View
-import android.widget.LinearLayout
 import android.widget.ImageView
-import android.widget.Space
+import android.widget.LinearLayout
 import android.widget.TextView
 
 internal interface HandlesHorizontalKeys
 
-/** Fixed navigation rail. Content geometry never changes when the rail gains focus. */
-internal class CatalogShell(context: Context, private val phone: (View) -> Unit = {}, private val navigate: (Int) -> Unit) : LinearLayout(context) {
+internal class CatalogShell(context: Context, private val navigate: (Int) -> Unit) : LinearLayout(context) {
     val body = LinearLayout(context).apply { orientation = VERTICAL }
-    private val rail = LinearLayout(context).apply { orientation = VERTICAL }
-    private val destinations = listOf(0 to "首页", 8 to "随心看", 1 to "找剧", 7 to "搜索", 2 to "排行榜", 3 to "我的", 9 to "扫码", 6 to "设置")
-    private val buttons = mutableListOf<TextView>()
+    private val shortcuts = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+    private val bottomBar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+    private val buttons = mutableMapOf<Int, TextView>()
     private var remembered: View? = null
     private var selectedDestination = 0
-    val navigation: List<TextView>
-        get() = (0..8).map { index -> buttons[destinations.indexOfFirst { it.first == if (index in 3..5) 3 else index }] }
 
-    val hasNavigationFocus: Boolean get() = rail.hasFocus()
+    val navigation: List<TextView>
+        get() = (0..8).map { buttons.getValue(if (it in 3..5) 3 else it) }
+
+    val hasNavigationFocus: Boolean
+        get() = shortcuts.hasFocus() || bottomBar.hasFocus()
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     init {
-        val compact = resources.configuration.screenHeightDp < 480
-        orientation = HORIZONTAL
+        orientation = VERTICAL
         setBackgroundColor(TvStyle.background)
-        rail.setPadding(dp(12), dp(if (compact) 12 else 20), dp(12), dp(if (compact) 12 else 16))
-        rail.setBackgroundColor(TvStyle.background)
-        rail.addView(ImageView(context).apply {
-            setImageResource(R.drawable.brand_mark)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "hongguoTV"
-            isFocusable = false
-            (drawable as? android.graphics.drawable.BitmapDrawable)?.isFilterBitmap = false
-        }, LayoutParams(-1, dp(if (compact) 40 else 56)).apply { bottomMargin = dp(if (compact) 12 else 24) })
-        destinations.forEach { (index, label) ->
-            if (index == 9) rail.addView(Space(context), LayoutParams(1, 0, 1f))
-            val button = TextView(context).apply {
-                id = View.generateViewId()
-                text = label
-                if (index == 9) contentDescription = "手机扫码控制"
-                textSize = if (compact) 13f else 14f
-                maxLines = 1
-                isFocusable = true
-                isClickable = true
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(dp(10), dp(if (compact) 6 else 10), dp(8), dp(if (compact) 6 else 10))
-                compoundDrawablePadding = dp(9)
-                setCompoundDrawablesWithIntrinsicBounds(TvGlyph(index, dp(18), TvStyle.muted), null, null, null)
-                isSelected = index == selectedDestination
-                fun paint() {
-                    paintNavigation(this)
-                }
-                setOnFocusChangeListener { _, _ -> paint() }
-                setOnClickListener { if (index == 9) phone(this) else if (index != selectedDestination) navigate(index) else restoreContent() }
-                paint()
-            }
-            buttons += button
-            rail.addView(button, LayoutParams(-1, dp(if (compact) 28 else 38)).apply { bottomMargin = dp(if (compact) 2 else 6) })
+        shortcuts.setPadding(dp(12), 0, dp(8), 0)
+        shortcuts.addView(
+            ImageView(context).apply {
+                setImageResource(R.drawable.brand_mark)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = "hongguoTV"
+            },
+            LayoutParams(dp(36), dp(36)),
+        )
+        shortcuts.addView(View(context), LayoutParams(0, 1, 1f))
+        listOf(8 to "随心看", 6 to "设置").forEach { (index, label) ->
+            shortcuts.addView(
+                destination(index, label, primary = false),
+                LayoutParams(-2, -2).apply { marginStart = dp(4) },
+            )
         }
-        addView(rail, LayoutParams(dp(112), -1))
-        body.setPadding(dp(24), dp(18), dp(24), dp(16))
-        addView(body, LayoutParams(0, -1, 1f))
+        addView(shortcuts, LayoutParams(-1, -2))
+
+        body.setPadding(dp(12), dp(6), dp(12), dp(8))
+        addView(body, LayoutParams(-1, 0, 1f))
+
+        addView(View(context).apply { setBackgroundColor(TvStyle.outline) }, LayoutParams(-1, dp(1)))
+        bottomBar.setBackgroundColor(TvStyle.surface)
+        bottomBar.setPadding(dp(6), dp(4), dp(6), dp(4))
+        val primaryDestinations = listOf(0 to "首页", 1 to "找剧", 7 to "搜索", 2 to "排行榜", 3 to "我的")
+        primaryDestinations.forEach { (index, label) ->
+            bottomBar.addView(destination(index, label, primary = true), LayoutParams(0, -2, 1f))
+        }
+        addView(bottomBar, LayoutParams(-1, -2))
+    }
+
+    private fun destination(index: Int, label: String, primary: Boolean): TextView {
+        val glyph = TvGlyph(index, dp(if (primary) 22 else 18), TvStyle.muted)
+        val button = TextView(context).apply {
+            id = View.generateViewId()
+            text = label
+            textSize = if (primary) 12f else 14f
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            isFocusable = true
+            minHeight = dp(if (primary) 52 else 48)
+            setPadding(dp(if (primary) 2 else 8), dp(6), dp(if (primary) 2 else 8), dp(6))
+            compoundDrawablePadding = dp(if (primary) 4 else 5)
+            if (primary) setCompoundDrawablesRelativeWithIntrinsicBounds(null, glyph, null, null)
+            else setCompoundDrawablesRelativeWithIntrinsicBounds(glyph, null, null, null)
+            setOnFocusChangeListener { _, _ -> paintNavigation(this) }
+            setOnClickListener {
+                if (index != selectedDestination) navigate(index)
+                else restoreContent()
+            }
+            isSelected = index == selectedDestination
+            paintNavigation(this)
+        }
+        buttons[index] = button
+        return button
     }
 
     private fun paintNavigation(button: TextView) {
         val focused = button.hasFocus()
         val ink = if (focused) TvStyle.background else if (button.isSelected) TvStyle.accent else TvStyle.muted
-        button.background = TvStyle.shape(context,
-            if (focused) TvStyle.text else if (button.isSelected) TvStyle.raised else Color.TRANSPARENT,
-            radius = 12)
+        val fill = if (focused) TvStyle.text else if (button.isSelected) TvStyle.raised else Color.TRANSPARENT
+        button.background = RippleDrawable(
+            catalogRippleColor(),
+            TvStyle.shape(context, fill, radius = 12),
+            TvStyle.shape(context, Color.WHITE, radius = 12),
+        )
         button.setTextColor(ink)
-        button.typeface = if (button.isSelected || focused) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
-        (button.compoundDrawables[0] as? TvGlyph)?.let { it.ink = ink; it.invalidateSelf() }
+        button.typeface = if (button.isSelected || focused) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        button.compoundDrawablesRelative.filterIsInstance<TvGlyph>().forEach {
+            it.ink = ink
+            it.invalidateSelf()
+        }
     }
 
     fun select(index: Int) {
         selectedDestination = if (index in 3..5) 3 else index
-        buttons.forEachIndexed { i, button ->
-            button.isSelected = destinations[i].first == selectedDestination
+        buttons.forEach { (destination, button) ->
+            button.isSelected = destination == selectedDestination
             paintNavigation(button)
         }
     }
@@ -94,67 +123,19 @@ internal class CatalogShell(context: Context, private val phone: (View) -> Unit 
         body.removeAllViews()
     }
 
-    private fun inContent(view: View?): Boolean {
-        var current = view
-        while (current != null) {
-            if (current === body) return true
-            current = current.parent as? View
-        }
-        return false
-    }
-
     override fun requestChildFocus(child: View, focused: View) {
-        if (inContent(focused)) remembered = focused
+        if (child === body) remembered = focused
         super.requestChildFocus(child, focused)
     }
 
     fun restoreContent(): Boolean {
-        val target = remembered?.takeIf { inContent(it) && it.isShown && it.isFocusable }
+        val target = remembered?.takeIf { it.isAttachedToWindow && it.isShown && it.isFocusable }
             ?: body.getFocusables(FOCUS_FORWARD).firstOrNull()
         return target?.requestFocus() == true
     }
-
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val focused = findFocus()
-        val index = buttons.indexOf(focused)
-        if (index >= 0 && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)) {
-            if (event.action == KeyEvent.ACTION_DOWN) when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP -> buttons[(index - 1).coerceAtLeast(0)].requestFocus()
-                KeyEvent.KEYCODE_DPAD_DOWN -> buttons[(index + 1).coerceAtMost(buttons.lastIndex)].requestFocus()
-                KeyEvent.KEYCODE_DPAD_RIGHT -> restoreContent()
-            }
-            return true
-        }
-        // Resolve vertical movement inside the content first, independent of the rail's
-        // geometry and stale nextFocus IDs. At the top, provide a direct route home.
-        val vertical = event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN
-        if (event.action == KeyEvent.ACTION_DOWN && vertical && inContent(focused) &&
-            focused !is android.widget.AbsListView) {
-            val direction = if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) FOCUS_UP else FOCUS_DOWN
-            val next = focused?.focusSearch(direction)
-            if (next == null || next === focused || !inContent(next)) {
-                val contentTarget = android.view.FocusFinder.getInstance()
-                    .findNextFocus(body, focused, direction)
-                    ?.takeIf { it !== focused && inContent(it) }
-                if (contentTarget != null) contentTarget.requestFocus()
-                else if (direction == FOCUS_UP) navigation[selectedDestination].requestFocus()
-                return true
-            }
-        }
-        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT &&
-            inContent(focused) && focused !is android.widget.AbsListView && focused !is HandlesHorizontalKeys) {
-            val next = focused?.focusSearch(FOCUS_LEFT)
-            if (next == null || !inContent(next) || next === focused) {
-                navigation[selectedDestination].requestFocus()
-                return true
-            }
-        }
-        val handled = super.dispatchKeyEvent(event)
-        if (event.action == KeyEvent.ACTION_DOWN && vertical && inContent(focused) && !inContent(findFocus())) {
-            focused?.requestFocus()
-            return true
-        }
-        return handled
-    }
 }
+
+internal fun catalogControlBackground(context: Context, focused: Boolean, selected: Boolean = false) =
+    RippleDrawable(catalogRippleColor(), TvStyle.card(context, focused, selected), null)
+
+private fun catalogRippleColor() = ColorStateList.valueOf((TvStyle.text and 0x00ffffff) or 0x24000000)

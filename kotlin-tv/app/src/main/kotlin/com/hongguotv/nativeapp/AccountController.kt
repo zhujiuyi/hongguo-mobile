@@ -14,11 +14,16 @@ import android.text.InputType
 import android.util.Base64
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.hongguotv.core.*
@@ -431,6 +436,8 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         if (!closed) Toast.makeText(activity, value, Toast.LENGTH_LONG).show()
     }
 
+    private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+
     private fun safeError(error: Throwable) =
         when (error) {
             is java.net.SocketTimeoutException -> "账号接口连接超时，请稍后重试"
@@ -446,8 +453,18 @@ class AccountController(private val activity: Activity, private val play: (Cloud
 
     private fun showDialog(builder: AlertDialog.Builder) {
         dialog?.dismiss()
-        dialog = builder.create()
-        dialog?.show()
+        dialog = builder.create().also { open(it) }
+    }
+
+    private fun open(next: AlertDialog, height: Int = -2, textInput: Boolean = false) {
+        if (textInput) {
+            next.window?.setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            )
+        }
+        next.show()
+        next.window?.setLayout(activity.dialogWidth(480), height)
     }
 
     fun show() {
@@ -459,13 +476,13 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         val signed = credentials != null
         val choices =
             if (signed) arrayOf("云端继续观看（最近 50 部）", "刷新账号和云端记录", "退出红果账号")
-            else arrayOf("使用红果 App 扫码登录", "手机号 + 验证码登录")
+            else arrayOf("手机号 + 验证码登录", "使用红果 App 扫码登录")
         showDialog(
             AlertDialog.Builder(activity)
                 .setTitle(profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号（测试功能）")
                 .setItems(choices) { _, index ->
                     if (!signed) {
-                        if (index == 0) qrLogin() else phone()
+                        if (index == 0) phone() else qrLogin()
                     } else
                         when (index) {
                             0 -> showHistory()
@@ -478,7 +495,7 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                         AlertDialog.Builder(activity)
                             .setTitle("账号同步状态")
                             .setMessage(
-                                "$status\n\n登录后，电视播放的进度会自动上传。手机记录可从「云端继续观看」打开。平台接口可能变化，首次使用请对照手机核对集数和时间。\n本机历史与云端记录分别保留；退出登录会停止上传。"
+                                "$status\n\n登录后，本机播放进度会自动上传。其他设备的进度可从「云端继续观看」打开。\n本机历史与云端记录分别保留，退出登录会停止上传。"
                             )
                             .setPositiveButton("关闭", null)
                     )
@@ -514,30 +531,29 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         }
     }
 
-    /**
-     * 手机号与验证码放在同一个对话框里：号码输入、「获取验证码」（发送后按钮倒数读秒）、
-     * 验证码输入与登录按钮，流程与手机 App 一致，避免电视上两次弹窗来回切换。
-     */
     private fun phone() {
         val context = activity
-        val density = context.resources.displayMetrics.density
-        fun px(value: Int) = (value * density).toInt()
 
         var country = "86"
         val countryButton =
             Button(context).apply {
                 text = "+86 ▾"
                 isAllCaps = false
+                minHeight = dp(48)
+                contentDescription = "选择国家或地区区号，当前 +86"
             }
         val mobile =
             EditText(context).apply {
-                hint = "手机号（大陆 11 位，境外不填前导 0）"
+                id = View.generateViewId()
+                hint = "手机号"
                 inputType = InputType.TYPE_CLASS_PHONE
                 isSingleLine = true
+                imeOptions = EditorInfo.IME_ACTION_NEXT
+                minHeight = dp(48)
             }
         val mobileRow =
             LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 addView(
                     countryButton,
                     LinearLayout.LayoutParams(
@@ -552,24 +568,30 @@ class AccountController(private val activity: Activity, private val play: (Cloud
             }
         val code =
             EditText(context).apply {
+                id = View.generateViewId()
                 hint = "短信验证码"
                 inputType = InputType.TYPE_CLASS_NUMBER
                 isSingleLine = true
+                imeOptions = EditorInfo.IME_ACTION_DONE
+                minHeight = dp(48)
             }
+        mobile.nextFocusForwardId = code.id
         val send =
             Button(context).apply {
                 text = "获取验证码"
                 isAllCaps = false
+                minHeight = dp(48)
             }
         val hint =
             TextView(context).apply {
-                text = "先获取验证码，再输入短信里的数字"
-                textSize = 13f
-                setPadding(0, px(8), 0, 0)
+                text = "境外号码不填前导 0，也可粘贴完整国际号码"
+                textSize = 14f
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+                setPadding(0, dp(8), 0, dp(4))
             }
         val row =
             LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 addView(
                     code,
                     LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
@@ -585,7 +607,7 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         val column =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(px(24), px(12), px(24), 0)
+                setPadding(dp(16), dp(8), dp(16), 0)
                 addView(mobileRow)
                 addView(row)
                 addView(hint)
@@ -630,12 +652,12 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         dialog =
             AlertDialog.Builder(context)
                 .setTitle("手机号 + 验证码登录")
-                .setView(column)
+                .setView(ScrollView(context).apply { addView(column) })
                 .setPositiveButton("登录", null)
                 .setNegativeButton("取消", null)
                 .setOnDismissListener { stopCountdown() }
                 .create()
-                .also { phoneDialog = it; it.show() }
+                .also { phoneDialog = it; open(it, textInput = true) }
 
         phoneDialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
             if (requestInFlight) return@setOnClickListener
@@ -674,10 +696,17 @@ class AccountController(private val activity: Activity, private val play: (Cloud
             )
         }
 
+        code.setOnEditorActionListener { _, action, _ ->
+            if (action != EditorInfo.IME_ACTION_DONE) return@setOnEditorActionListener false
+            phoneDialog.getButton(AlertDialog.BUTTON_POSITIVE)?.takeIf { it.isEnabled }?.performClick()
+            true
+        }
+
         countryButton.setOnClickListener {
             pickCountryCode(context, country) { picked ->
                 country = picked
                 countryButton.text = "+$picked ▾"
+                countryButton.contentDescription = "选择国家或地区区号，当前 +$picked"
             }
         }
 
@@ -710,6 +739,7 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                     phoneDialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
                     login = fresh
                     hint.text = "验证码已发送至 ${sent.maskedMobile}"
+                    if (mobile.hasFocus()) code.requestFocus()
                     startCountdown(sent.retrySeconds)
                 },
                 { failure ->
@@ -802,12 +832,11 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         current: String,
         onPick: (String) -> Unit,
     ) {
-        val density = context.resources.displayMetrics.density
-        fun px(value: Int) = (value * density).toInt()
         val search =
             EditText(context).apply {
                 hint = "输入国家/地区名称或区号筛选"
                 isSingleLine = true
+                minHeight = dp(48)
             }
         val list = ListView(context)
         fun label(rows: List<CountryCode>) = rows.map { "${it.name}  +${it.code}" }
@@ -841,9 +870,9 @@ class AccountController(private val activity: Activity, private val play: (Cloud
         val column =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(px(20), px(8), px(20), 0)
+                setPadding(dp(16), dp(8), dp(16), 0)
                 addView(search)
-                addView(list, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(260)))
+                addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
             }
         picker =
             AlertDialog.Builder(context)
@@ -851,7 +880,8 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                 .setView(column)
                 .setNegativeButton("取消", null)
                 .create()
-        picker.show()
+        val height = minOf(dp(440), (activity.resources.displayMetrics.heightPixels * .84f).toInt())
+        open(picker, height, textInput = true)
     }
 
     /** 需要重新发码或改用扫码时才打断用户；可重试的错误留在面板里显示。 */
@@ -927,7 +957,7 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                     toast("登录二维码无法显示，请重试")
                     return@task
                 }
-                val size = (300 * activity.resources.displayMetrics.density).toInt()
+                val size = minOf(dp(300), (activity.dialogWidth(480) - dp(48)).coerceAtLeast(1))
                 val image =
                     android.widget.ImageView(activity).apply {
                         setImageBitmap(bitmap)
@@ -941,21 +971,21 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                 val panel =
                     android.widget.LinearLayout(activity).apply {
                         orientation = android.widget.LinearLayout.VERTICAL
-                        setPadding(24, 16, 24, 16)
+                        setPadding(dp(16), dp(8), dp(16), dp(8))
                         addView(image)
                         addView(
                             android.widget.TextView(activity).apply {
-                                text = "用手机红果 App：我的 → 右上角菜单 → 扫一扫\n扫码后请在手机确认登录"
-                                textSize = 18f
+                                text = "在另一台设备的红果 App 打开「我的 → 右上角菜单 → 扫一扫」，扫码后确认登录。"
+                                textSize = 16f
                                 gravity = android.view.Gravity.CENTER
-                                setPadding(0, 12, 0, 0)
+                                setPadding(0, dp(8), 0, 0)
                             }
                         )
                     }
                 showDialog(
                     AlertDialog.Builder(activity)
                         .setTitle("红果官方扫码登录")
-                        .setView(panel)
+                        .setView(ScrollView(activity).apply { addView(panel) })
                         .setNegativeButton("取消", null)
                 )
                 val current = dialog ?: return@task

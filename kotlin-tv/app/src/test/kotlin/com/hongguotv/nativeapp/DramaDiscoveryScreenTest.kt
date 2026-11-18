@@ -20,10 +20,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadows.ShadowAlertDialog
 import org.robolectric.shadows.ShadowLooper
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [26], qualifiers = "w960dp-h540dp-land-mdpi")
+@Config(sdk = [26], qualifiers = "w320dp-h640dp-port-mdpi")
 @LooperMode(LooperMode.Mode.PAUSED)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 class DramaDiscoveryScreenTest {
@@ -47,10 +48,10 @@ class DramaDiscoveryScreenTest {
     private fun layout(activity: MainActivity) {
         val decor = activity.window.decorView
         decor.measure(
-            View.MeasureSpec.makeMeasureSpec(960, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(540, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY),
         )
-        decor.layout(0, 0, 960, 540)
+        decor.layout(0, 0, 320, 640)
         ShadowLooper.idleMainLooper()
     }
 
@@ -64,6 +65,17 @@ class DramaDiscoveryScreenTest {
         listOf(view) +
             (if (view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) }
             else emptyList())
+
+    private fun filterOptions(root: View, group: String): android.widget.ListView {
+        texts(root).single { it.text.startsWith("筛选") }.performClick()
+        choose(ShadowAlertDialog.getLatestAlertDialog().listView) { it.startsWith("$group · ") }
+        return ShadowAlertDialog.getLatestAlertDialog().listView
+    }
+
+    private fun choose(list: android.widget.ListView, matches: (String) -> Boolean) {
+        val index = (0 until list.adapter.count).single { matches(list.adapter.getItem(it).toString()) }
+        list.performItemClick(list.adapter.getView(index, null, list), index, list.adapter.getItemId(index))
+    }
 
     private fun response(request: Request): String {
         if (request.url.encodedPath == "/incent_resource/suggestion")
@@ -156,25 +168,20 @@ class DramaDiscoveryScreenTest {
             pump(activity)
             val root = activity.findViewById<View>(android.R.id.content)
             assertNull(get(activity, "searchInput"))
-            assertTrue((get(activity, "discoveryBrowser") as DiscoveryBrowserState).expanded)
-            for (label in listOf("主题", "设定", "背景", "推荐", "受众", "时间")) assertTrue(
-                label,
-                texts(root).any { it.text.toString() == label },
-            )
-            texts(root).single { it.text.toString() == "重生" }.performClick()
+            choose(filterOptions(root, "设定")) { it == "重生" }
             pump(activity)
-            texts(root).single { it.text.toString() == "都市" }.performClick()
+            choose(filterOptions(root, "背景")) { it == "都市" }
             pump(activity)
             val selected = body(requests.last()).getJSONObject("select_items")
             assertEquals("cate_36", selected.getJSONArray("category_dim_role").getString(0))
             assertEquals("cate_1", selected.getJSONArray("category_dim_epoch").getString(0))
-            assertTrue(texts(root).single { it.text.toString() == "都市" }.hasFocus())
+            assertTrue(texts(root).any { it.text.contains("设定：重生") && it.text.contains("背景：都市") })
             val browser = views(root).filterIsInstance<ContinuousCatalogView>().single()
             failNext.set(true)
             browser.next.performClick()
             pump(activity)
             assertEquals(1, browser.grid.adapter.count)
-            assertEquals("重试加载", browser.next.text.toString())
+            assertEquals("重试", browser.next.text.toString())
             browser.next.performClick()
             pump(activity)
             assertEquals("test-cursor", body(requests.last()).getString("session_id"))
@@ -185,22 +192,22 @@ class DramaDiscoveryScreenTest {
             layout(activity)
             assertEquals("102", browser.capture()?.id)
             val state = get(activity, "discoveryBrowser") as DiscoveryBrowserState
-            assertTrue(state.expanded)
             assertNull("Discovery must not mount the search panel", get(activity, "tvSearchPanel"))
             assertNull("Discovery must not contain a search input", get(activity, "searchInput"))
             assertTrue(views(root).none { it is EditText })
-            assertEquals(5, browser.grid.numColumns)
+            assertEquals(2, browser.grid.numColumns)
             @Suppress("UNCHECKED_CAST")
             val nav = get(activity, "nav") as List<View>
             nav[7].performClick()
             assertNull("Search must not mount discovery filters", get(activity, "discoveryScreen"))
-            assertTrue((get(activity, "tvSearchPanel") as TvSearchPanel).entry().hasFocus())
             val input = get(activity, "searchInput") as EditText
+            assertFalse((get(activity, "tvSearchPanel") as TvSearchPanel).showingResults)
+            assertTrue(input.showSoftInputOnFocus)
             input.setText("大佬")
             (get(activity, "tvSearchPanel") as TvSearchPanel).searchButton.performClick()
             pump(activity)
             assertTrue(texts(root).any { it.text.toString() == "大佬搜索结果剧" })
-            assertTrue("Explicit search should focus results", views(root).filterIsInstance<ContinuousCatalogView>().single().grid.hasFocus())
+            assertEquals(1, views(root).filterIsInstance<ContinuousCatalogView>().single().grid.numColumns)
             val count = requests.size
             nav[1].performClick()
             layout(activity)
@@ -209,17 +216,14 @@ class DramaDiscoveryScreenTest {
             assertEquals("102", restored.capture()?.id)
             assertEquals(2, restored.grid.adapter.count)
             assertEquals("cate_36", state.selection.values["category_dim_role"])
-            for (label in listOf("重生", "都市")) {
-                val chip = texts(root).single { it.text.toString() == label }
-                assertTrue("Restored filter $label", chip.isSelected)
-            }
+            assertTrue(texts(root).any { it.text.contains("设定：重生") && it.text.contains("背景：都市") })
             val savedSelection = state.selection
             set(activity, "detail", Detail(Series("102", "分类第2页"), listOf("1001")))
             MainActivity::class
                 .java
-                .getDeclaredMethod("showDetail", Boolean::class.javaPrimitiveType)
+                .getDeclaredMethod("showDetail", Boolean::class.javaPrimitiveType, Int::class.javaObjectType)
                 .apply { isAccessible = true }
-                .invoke(activity, false)
+                .invoke(activity, false, null)
             pump(activity)
             MainActivity::class
                 .java
@@ -230,23 +234,21 @@ class DramaDiscoveryScreenTest {
             restored = views(root).filterIsInstance<ContinuousCatalogView>().single()
             assertEquals("102", restored.capture()?.id)
             assertEquals(savedSelection, state.selection)
-            for (label in listOf("重生", "都市")) assertTrue(
-                texts(root).single { it.text.toString() == label }.isSelected
-            )
+            assertTrue(texts(root).any { it.text.contains("设定：重生") && it.text.contains("背景：都市") })
             MainActivity::class
                 .java
                 .getDeclaredMethod("goBack")
                 .apply { isAccessible = true }
                 .invoke(activity)
             layout(activity)
-            assertEquals("102", restored.capture()?.id)
-            assertTrue(texts(root).single { it.isClickable && it.text.toString() == "找剧" }.hasFocus())
+            assertTrue(nav[0].isSelected)
             assertEquals(savedSelection, state.selection)
+            nav[1].performClick()
             texts(root).single { it.text.toString() == "真人剧" }.performClick()
             pump(activity)
             assertEquals(mapOf("genre" to "short_play"), state.selection.values)
-            assertTrue(texts(root).any { it.text.toString() == "爱情" })
-            assertFalse(texts(root).any { it.text.toString() == "玄幻" })
+            val topics = filterOptions(root, "主题")
+            assertEquals(listOf("全部", "爱情"), (0 until topics.adapter.count).map { topics.adapter.getItem(it) })
         } finally {
             controller.destroy()
         }

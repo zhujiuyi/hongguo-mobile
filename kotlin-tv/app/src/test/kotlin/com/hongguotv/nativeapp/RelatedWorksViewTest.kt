@@ -14,7 +14,7 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [26], qualifiers = "w960dp-h540dp-land-mdpi")
+@Config(sdk = [26], qualifiers = "w320dp-h640dp-port-mdpi")
 @LooperMode(LooperMode.Mode.PAUSED)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 class RelatedWorksViewTest {
@@ -25,7 +25,7 @@ class RelatedWorksViewTest {
             else emptyList()
 
     @Test
-    fun allSeasonsGridCanOpenFortiethSeasonAndClosesOnDetach() {
+    fun scrollingListCanOpenFortiethSeasonAndClosesOnDetach() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
         var selected: RelatedWork? = null
@@ -34,7 +34,7 @@ class RelatedWorksViewTest {
             activity.setContentView(strip)
             val rows = (1..40).map { RelatedWork(Series("$it", "长剧第${it}季"), "第${it}季", false, it) }
             strip.show(rows)
-            val all = descendants(strip).filterIsInstance<TextView>().single { it.text.toString().startsWith("全部季 /") }
+            val all = descendants(strip).filterIsInstance<TextView>().single { it.text.toString().startsWith("全部 ") }
             all.performClick()
             val dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
             assertEquals(40, descendants(dialog.window!!.decorView).filter { it.tag?.toString()?.startsWith("all-") == true }
@@ -50,7 +50,7 @@ class RelatedWorksViewTest {
     }
 
     @Test
-    fun upcomingCardsUseReservationActionAndRemoteCanReachStripFromEpisodes() {
+    fun touchCardsOpenSeriesOrShowReservationStatus() {
         val activity = Robolectric.buildActivity(Activity::class.java).setup()
         try {
             val episode = TextView(activity.get()).apply { id = View.generateViewId() }
@@ -73,11 +73,12 @@ class RelatedWorksViewTest {
             val views = descendants(strip)
             val released = views.single { it.tag == "123" }
             val future = views.single { it.tag == "456" }
-            assertEquals(released.id, episode.nextFocusDownId)
-            assertEquals(future.id, released.nextFocusRightId)
+            assertFalse(released.isFocusableInTouchMode)
+            assertFalse(future.isFocusableInTouchMode)
             val refresh = views.filterIsInstance<TextView>().single { it.text.toString() == "刷新" }
-            assertEquals(views.filterIsInstance<TextView>().single { it.text.toString().startsWith("全部季 /") }.id, future.nextFocusUpId)
             assertEquals(episode.id, refresh.nextFocusUpId)
+            released.performClick()
+            assertEquals(current, selected)
             future.performClick()
             assertEquals(upcoming, selected)
             assertTrue(selected!!.upcoming)

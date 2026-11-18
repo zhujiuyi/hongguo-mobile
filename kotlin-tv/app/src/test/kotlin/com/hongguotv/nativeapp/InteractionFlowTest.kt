@@ -2,9 +2,13 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import com.hongguotv.core.*
 import java.util.concurrent.ExecutorService
@@ -34,44 +38,105 @@ class InteractionFlowTest {
     }
     private fun texts(view: View): List<TextView> = if (view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if (view is TextView) listOf(view) else emptyList()
 
-    @Test fun playbackInlineSelectorSharesDetailRangesGridAndRestoresMenuOnDismiss() {
+    private fun tap(view: View) {
+        val time = SystemClock.uptimeMillis()
+        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+            val event = MotionEvent.obtain(time, time, action, view.width / 2f, view.height / 2f, 0)
+            view.dispatchTouchEvent(event)
+            event.recycle()
+        }
+        ShadowLooper.idleMainLooper()
+    }
+
+    private fun layout(dialog: AlertDialog): View {
+        val decor = dialog.window!!.decorView
+        decor.measure(
+            View.MeasureSpec.makeMeasureSpec(dialog.window!!.attributes.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(700, View.MeasureSpec.AT_MOST),
+        )
+        decor.layout(0, 0, decor.measuredWidth, decor.measuredHeight)
+        return decor
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h800dp-port-mdpi")
+    fun playbackSelectorSupportsOneTapAndAdaptiveColumns() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
         var played = -1
         var located = -1
-        val panel = EpisodePanel(activity, 65, 24, { current, _, _ -> located = current }, { played = it }, {}, 22)
+        var closed = 0
+        lateinit var panel: EpisodePanel
+        panel = EpisodePanel(
+            activity, 65, 24,
+            { current, _, _ -> located = current },
+            { played = it; panel.dismiss() },
+            { closed++ },
+            22,
+        )
         try {
-            val decor = android.widget.LinearLayout(activity).apply { orientation = 1 }
-            val menu = android.widget.LinearLayout(activity)
-            val anchor = TextView(activity).apply { id = View.generateViewId(); isFocusable = true; isFocusableInTouchMode = true }
-            menu.addView(anchor)
-            decor.addView(menu)
-            activity.setContentView(decor)
+            val host = LinearLayout(activity)
+            val anchor = TextView(activity).apply {
+                id = View.generateViewId()
+                isFocusableInTouchMode = true
+            }
+            host.addView(anchor)
+            activity.setContentView(host)
             val oldDown = anchor.nextFocusDownId
-            panel.show(decor, anchor)
-            assertEquals(2, decor.childCount)
-            assertSame(menu, decor.getChildAt(0))
+            panel.show(host, anchor)
+            val dialog = ShadowAlertDialog.getLatestAlertDialog()
+            val decor = layout(dialog)
+            assertEquals(1, host.childCount)
             val current = texts(decor).single { it.text == "25\n当前" }
-            assertTrue(current.hasFocus())
+            assertTrue(current.isSelected)
+            assertFalse(current.isFocusableInTouchMode)
             val cells = texts(decor).filter { it.tag?.toString()?.startsWith("episode-") == true && !it.tag.toString().startsWith("episode-group-") }
             assertEquals(20, cells.size)
-            assertEquals(10, (cells.first().parent as ViewGroup).childCount)
+            val columns = (cells.first().parent as ViewGroup).childCount
+            assertTrue(columns in 2..6)
+            assertTrue(cells.first().width >= 48)
+            assertEquals(cells[columns].id, cells.first().nextFocusDownId)
             assertEquals(listOf("1–20", "21–40", "41–60", "61–65"), texts(decor).filter { it.tag?.toString()?.startsWith("episode-group-") == true }.map { it.text.toString() })
             assertTrue(texts(decor).any { it.text == "23\n上次" })
-            assertFalse(texts(decor).any { it.text == "跳转集数" })
-            val lastGroup = decor.findViewWithTag<View>("episode-group-3")
-            assertEquals(lastGroup.id, lastGroup.nextFocusRightId)
-            decor.findViewWithTag<View>("episode-group-3").performClick()
-            val last = decor
-            assertTrue(last.findViewWithTag<View>("episode-group-3").hasFocus())
+            tap(texts(decor).single { it.text == "跳转集数" })
+            assertEquals(24, located)
+            tap(decor.findViewWithTag<View>("episode-group-3"))
+            layout(dialog)
+            assertTrue(decor.findViewWithTag<View>("episode-group-3").isSelected)
             assertEquals(-1, played)
-            last.findViewWithTag<View>("episode-64").performClick()
+            tap(decor.findViewWithTag<View>("episode-64"))
             assertEquals(64, played)
-            panel.dismiss()
-            assertEquals(1, decor.childCount)
+            assertEquals(1, closed)
+            assertFalse(dialog.isShowing)
             assertTrue(anchor.hasFocus())
             assertEquals(oldDown, anchor.nextFocusDownId)
+
+            panel.show(host, anchor)
+            ShadowAlertDialog.getLatestAlertDialog().onBackPressed()
+            ShadowLooper.idleMainLooper()
+            assertEquals(2, closed)
         } finally { panel.dismiss(); controller.pause().stop().destroy() }
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h800dp-port-mdpi")
+    fun accountOffersPhoneLoginFirst() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val account = AccountController(controller.get()) {}
+        try {
+            flush(account)
+            account.show()
+            val choices = ShadowAlertDialog.getLatestAlertDialog().listView
+            assertEquals("手机号 + 验证码登录", choices.adapter.getItem(0).toString())
+            choices.performItemClick(choices.adapter.getView(0, null, choices), 0, 0)
+            val dialog = ShadowAlertDialog.getLatestAlertDialog()
+            val fields = texts(dialog.window!!.decorView).filterIsInstance<EditText>()
+            assertEquals(listOf("手机号", "短信验证码"), fields.map { it.hint.toString() })
+            assertTrue(fields[0].nextFocusForwardId == fields[1].id)
+        } finally {
+            account.destroy()
+            controller.pause().stop().destroy()
+        }
     }
 
     @Test fun episodeInputKeepsInvalidInputOpenAndValidInputPlaysOnce() {

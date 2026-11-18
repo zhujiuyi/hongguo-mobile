@@ -19,17 +19,14 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [21, 26, 33], qualifiers = "mdpi")
 class BrandResourcesTest {
-    @Test fun manifestIconKeepsTransparentRgbaTvBodyWithoutColoredBackground() {
+    @Test fun phoneLauncherKeepsTransparentRgbaIcon() {
         val app = RuntimeEnvironment.getApplication()
         val info = app.packageManager.getApplicationInfo(app.packageName, 0)
         val icon = app.resources.getDrawable(info.icon, app.theme)
         assertTrue("Expected transparent RGBA BitmapDrawable without opaque AdaptiveIconDrawable backdrop", icon is BitmapDrawable)
         assertEquals(80, icon.intrinsicWidth)
         assertEquals(80, icon.intrinsicHeight)
-        val banner = app.resources.getDrawable(info.banner, app.theme)
-        assertTrue(banner is BitmapDrawable)
-        assertEquals(160, banner.intrinsicWidth)
-        assertEquals(90, banner.intrinsicHeight)
+        assertEquals(0, info.banner)
         for (size in listOf(24, 48, 160)) {
             val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             icon.setBounds(0, 0, size, size)

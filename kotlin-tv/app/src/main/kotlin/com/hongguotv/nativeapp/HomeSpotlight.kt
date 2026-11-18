@@ -2,6 +2,7 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import android.graphics.Typeface
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -10,7 +11,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.hongguotv.core.Series
 
-/** Real covers are not clean backdrops: keep source lettering and app text in separate columns. */
+/** Continue-watching banner with its own poster, title, and actions. */
 internal class HomeSpotlight(
     context: Context,
     series: Series,
@@ -24,10 +25,13 @@ internal class HomeSpotlight(
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     init {
-        orientation = HORIZONTAL
+        val compact = resources.configuration.screenWidthDp < 600
+        orientation = if (compact) VERTICAL else HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(18), dp(12), dp(18), dp(12))
+        val horizontalPadding = dp(if (compact) 12 else 18)
+        setPadding(horizontalPadding, dp(12), horizontalPadding, dp(12))
         background = TvStyle.shape(context, TvStyle.surface)
+        val header = if (compact) LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL } else this
         val info = LinearLayout(context).apply { orientation = VERTICAL }
         fun label(value: String, size: Float, color: Int, lines: Int = 1) = TextView(context).apply {
             text = value
@@ -37,36 +41,48 @@ internal class HomeSpotlight(
             ellipsize = TextUtils.TruncateAt.END
             includeFontPadding = false
         }
-        info.addView(label(if (resume) "接着上次的故事" else "今日精选", 12f, TvStyle.accent))
-        info.addView(label(series.title, 26f, TvStyle.text, 2), LayoutParams(-1, -2).apply { topMargin = dp(5) })
+        val title = label(series.title, if (compact) 20f else 26f, TvStyle.text, 2).apply {
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        info.addView(title, LayoutParams(-1, -2))
         info.addView(label(status.ifBlank { series.tags }, 13f, TvStyle.muted), LayoutParams(-1, -2).apply { topMargin = dp(5) })
         val actions = LinearLayout(context)
         fun action(value: String, proceed: () -> Unit) = label(value, 14f, TvStyle.text).apply {
             id = View.generateViewId()
             isFocusable = true
+            isFocusableInTouchMode = false
             isClickable = true
-            minHeight = dp(40)
+            minHeight = dp(48)
             gravity = Gravity.CENTER
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            background = TvStyle.card(context, false)
-            setOnFocusChangeListener { _, focus -> background = TvStyle.card(context, focus) }
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = catalogControlBackground(context, false)
+            setOnFocusChangeListener { _, focus -> background = catalogControlBackground(context, focus) }
             setOnClickListener { proceed() }
         }
         play = action(if (resume) "▶ 继续观看" else "▶ 开始观看") { open(true) }
         detail = action("查看详情") { open(false) }
         play.tag = "home:spotlight:play"
         detail.tag = "home:spotlight:detail"
-        actions.addView(play)
-        actions.addView(detail, LayoutParams(-2, -2).apply { leftMargin = dp(12) })
+        val actionWidth = if (compact) 0 else -2
+        val actionWeight = if (compact) 1f else 0f
+        actions.addView(play, LayoutParams(actionWidth, -2, actionWeight))
+        actions.addView(detail, LayoutParams(actionWidth, -2, actionWeight).apply { marginStart = dp(8) })
         play.nextFocusRightId = detail.id
         detail.nextFocusLeftId = play.id
-        info.addView(actions, LayoutParams(-1, -2).apply { topMargin = dp(10) })
-        addView(info, LayoutParams(0, -2, 1f))
+        val actionsParams = LayoutParams(-1, -2).apply { topMargin = dp(10) }
+        if (!compact) info.addView(actions, actionsParams)
+        header.addView(info, LayoutParams(0, -2, 1f))
         val image = ImageView(context).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
+            scaleType = ImageView.ScaleType.CENTER_CROP
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        addView(image, LayoutParams(dp(104), dp(148)).apply { leftMargin = dp(24) })
+        header.addView(image, LayoutParams(dp(if (compact) 72 else 104), dp(if (compact) 103 else 148)).apply {
+            marginStart = dp(if (compact) 12 else 24)
+        })
+        if (compact) {
+            addView(header, LayoutParams(-1, -2))
+            addView(actions, actionsParams)
+        }
         cover(image, series.cover)
     }
 }

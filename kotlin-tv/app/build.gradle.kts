@@ -6,7 +6,7 @@ plugins {
 }
 
 val legacyAudio = providers.gradleProperty("legacyAudio").map { it.toBooleanStrict() }.getOrElse(false)
-if (!legacyAudio) layout.buildDirectory.set(file("build/platform"))
+if (!legacyAudio) layout.buildDirectory.set(layout.buildDirectory.get().dir("platform"))
 
 val signingProperties =
     Properties().apply {
@@ -21,15 +21,15 @@ android {
     namespace = "com.hongguotv.nativeapp"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.hongguotv.nativeapp"
+        applicationId = "com.hongguotv.mobile"
         testInstrumentationRunner = "com.hongguotv.nativeapp.LivePlaybackInstrumentation"
-        manifestPlaceholders["appLabel"] = "hongguoTV"
+        manifestPlaceholders["appLabel"] = "红果手机版"
         minSdk = 21
         if (!legacyAudio) minSdk = 23
         buildConfigField("boolean", "LEGACY_AUDIO", legacyAudio.toString())
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 29
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.16.8"
+        versionCode = System.getenv("HONGGUO_MOBILE_VERSION_CODE")?.toInt() ?: 1
+        versionName = System.getenv("HONGGUO_MOBILE_VERSION_NAME") ?: "0.1.0"
     }
     // Publish explicit ARM installer choices plus a universal updater fallback.
     splits {
@@ -54,20 +54,20 @@ android {
     }
     signingConfigs {
         create("delivery") {
-            storeFile = signingValue("HONGGUOTV_KEYSTORE", "storeFile")?.let { file(it) }
-            storePassword = signingValue("HONGGUOTV_STORE_PASSWORD", "storePassword")
-            keyAlias = signingValue("HONGGUOTV_KEY_ALIAS", "keyAlias")
-            keyPassword = signingValue("HONGGUOTV_KEY_PASSWORD", "keyPassword")
+            storeFile = signingValue("HONGGUO_MOBILE_KEYSTORE", "storeFile")?.let { file(it) }
+            storePassword = signingValue("HONGGUO_MOBILE_STORE_PASSWORD", "storePassword")
+            keyAlias = signingValue("HONGGUO_MOBILE_KEY_ALIAS", "keyAlias")
+            keyPassword = signingValue("HONGGUO_MOBILE_KEY_PASSWORD", "keyPassword")
         }
     }
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug.20261114"
-            manifestPlaceholders["appLabel"] = "hongguoTV"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["appLabel"] = "红果手机版（调试）"
         }
         getByName("release") {
-            signingConfig = signingConfigs.getByName("delivery")
+            signingConfig = signingConfigs.getByName("delivery").takeIf { it.storeFile != null }
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

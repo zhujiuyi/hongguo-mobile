@@ -2,10 +2,12 @@
 package com.hongguotv.nativeapp
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.view.View
 import android.widget.LinearLayout
+import android.widget.ScrollView
 
-/** Inline playback expansion using the detail page's episode selector. */
+/** Scrollable playback dialog using the detail page's episode selector. */
 class EpisodePanel(
     private val activity: Activity,
     private val count: Int,
@@ -17,52 +19,62 @@ class EpisodePanel(
     private val lastCompleted: Boolean = false,
 ) {
     private var group = current / 20
-    private var host: LinearLayout? = null
-    private lateinit var anchor: View
-    private val content = LinearLayout(activity).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(0, (12 * resources.displayMetrics.density).toInt(), 0, 0)
-    }
-    private val downPaths = mutableListOf<Pair<View, Int>>()
+    private var dialog: AlertDialog? = null
+    private var anchor: View? = null
 
     fun show(host: LinearLayout, anchor: View) {
-        if (this.host != null) return
-        this.host = host
+        if (dialog != null) return
         this.anchor = anchor
-        val menu = host.getChildAt(0) as? LinearLayout
-        if (menu != null) for (i in 0 until menu.childCount) {
-            val button = menu.getChildAt(i)
-            downPaths += button to button.nextFocusDownId
+        val padding = (12 * activity.resources.displayMetrics.density).toInt()
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding, padding, 0)
         }
-        host.addView(content, minOf(1, host.childCount))
+        val scroll = ScrollView(activity).apply { addView(content) }
+        fun render(focusGroup: Boolean = false) {
+            content.removeAllViews()
+            val selector = EpisodeSelectorView(
+                activity, count, current, group, lastWatched, lastCompleted,
+                onGroup = { next ->
+                    group = next
+                    render(focusGroup = true)
+                },
+                onJump = { focusedEpisode, view ->
+                    locate(focusedEpisode, view) { target -> if (target in 0 until count) select(target) }
+                },
+                onSelect = select,
+            )
+            content.addView(selector)
+            val target =
+                if (focusGroup) selector.groupButtons[group]
+                else selector.episodes.getOrNull(current - group * 20) ?: selector.jump
+            target.requestFocus()
+            if (focusGroup && selector.isInTouchMode) scroll.scrollTo(0, 0)
+        }
+        val next = AlertDialog.Builder(host.context)
+            .setTitle("选集 · 共 $count 集")
+            .setPositiveButton("关闭", null)
+            .create()
+        next.setView(scroll, 0, 0, 0, 0)
+        dialog = next
+        next.setOnDismissListener { if (dialog === next) finish() }
         render()
+        next.show()
+        next.stylePanel()
+        next.window?.setLayout(activity.dialogWidth(560), -2)
     }
 
     fun dismiss() {
-        val parent = host ?: return
-        host = null
-        parent.removeView(content)
-        downPaths.forEach { (view, id) -> view.nextFocusDownId = id }
-        downPaths.clear()
-        if (anchor.isAttachedToWindow) anchor.requestFocus()
-        closed()
+        val next = dialog ?: return
+        dialog = null
+        next.dismiss()
+        finish()
     }
 
-    private fun render(focusGroup: Boolean = false) {
-        content.removeAllViews()
-        val selector = EpisodeSelectorView(
-            activity, count, current, group, lastWatched, lastCompleted,
-            onGroup = { next -> group = next; render(focusGroup = true) },
-            onJump = { focusedEpisode, view -> locate(focusedEpisode, view) { target -> if (target in 0 until count) select(target) } },
-            onSelect = select,
-            transparent = true,
-            showJump = false,
-        )
-        content.addView(selector)
-        selector.groupButtons.forEach { it.nextFocusUpId = anchor.id }
-        selector.jump.nextFocusUpId = anchor.id
-        downPaths.forEach { (view, _) -> view.nextFocusDownId = selector.groupButtons[group].id }
-        if (focusGroup) selector.groupButtons[group].requestFocus()
-        else (selector.episodes.getOrNull(current - group * 20) ?: selector.jump).requestFocus()
+    private fun finish() {
+        dialog = null
+        anchor?.takeIf { it.isAttachedToWindow }?.requestFocus()
+        anchor = null
+        closed()
     }
 }

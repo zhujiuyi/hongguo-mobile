@@ -2,8 +2,8 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
-import android.graphics.Typeface
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
@@ -48,7 +48,7 @@ class SeriesPreview(context: Context) : LinearLayout(context) {
     fun show(series: Series?, status: String) {
         val nextTitle = series?.title ?: "选择下方作品查看信息"
         val nextMeta =
-            if (series == null) "方向键选择 · 确认打开作品"
+            if (series == null) "轻点作品查看详情"
             else
                 listOf(status, series.badge, series.tags)
                     .flatMap { it.split('·') }
@@ -61,7 +61,7 @@ class SeriesPreview(context: Context) : LinearLayout(context) {
     }
 }
 
-/** Bounded horizontal shelves with stable D-pad selection and per-row scroll positions. */
+/** Horizontal shelves with individual scroll positions and keyboard focus restoration. */
 class HomeScreen(
     context: Context,
     private val top: View,
@@ -103,6 +103,7 @@ class HomeScreen(
         val progress: ProgressBar?,
         var entry: Entry?,
         var pending: Boolean = false,
+        var inViewport: Boolean = false,
     )
 
     private data class Row(
@@ -116,7 +117,16 @@ class HomeScreen(
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
 
-    private fun shape(focus: Boolean) = TvStyle.card(context, focus)
+    private fun cardWidth(available: Int) = if (available < dp(600)) {
+        ((available - dp(12)) / 2.8f).roundToInt().coerceIn(dp(88), dp(156))
+    } else ((available - dp(60)) / 5).coerceAtLeast(dp(100))
+
+    private fun cardSpacing(available: Int) = dp(if (available < dp(600)) 8 else 14)
+
+    private fun posterHeight(cardWidth: Int) =
+        ((cardWidth - dp(8)).coerceAtLeast(1) / TvStyle.POSTER_ASPECT).roundToInt()
+
+    private fun shape(focus: Boolean) = catalogControlBackground(context, focus)
 
     private fun label(value: String, size: Float, color: Int = TvStyle.text) =
         TextView(context).apply {
@@ -128,6 +138,11 @@ class HomeScreen(
 
     private val scroll =
         object : ScrollView(context) {
+            override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+                super.onScrollChanged(l, t, oldl, oldt)
+                if (t != oldt) scheduleVisibleArtwork()
+            }
+
             override fun requestChildFocus(child: View, focused: View) {
                 super.requestChildFocus(child, focused)
                 if (focused.tag?.toString()?.startsWith("home:spotlight:") == true) {
@@ -168,6 +183,7 @@ class HomeScreen(
     private var restoring = false
     private var revision = 0
     private val notice = label("", 13f).apply { visibility = GONE }
+    private val visibleArtwork = Runnable(::loadVisibleArtwork)
 
     fun showStatus(message: String) {
         notice.text = message
@@ -211,6 +227,7 @@ class HomeScreen(
         val card = cards["$shelfKey:${entry.series.id}"] ?: return false
         if (card.entry?.series?.cover != entry.series.cover) {
             card.image?.setImageDrawable(null)
+            card.inViewport = false
         }
         card.entry = entry
         card.title.text = entry.series.title
@@ -232,6 +249,7 @@ class HomeScreen(
             }
         if (lastFocus == card.key) refreshSelection()
         loadNearbySelection()
+        loadVisibleArtwork()
         return true
     }
 
@@ -241,7 +259,9 @@ class HomeScreen(
 
     /** Retry visible cover requests after the owner cancels work for a page or lifecycle change. */
     fun reloadArtwork() {
+        cards.values.forEach { it.inViewport = false }
         loadNearbySelection()
+        loadVisibleArtwork()
     }
 
     fun render(
@@ -263,6 +283,9 @@ class HomeScreen(
         cards.clear()
         moreButton = null
         lastRow = null
+        val available = width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val cardWidth = cardWidth(available)
+        val spacing = cardSpacing(available)
         shelves
             .filter { it.entries.isNotEmpty() || it.more != null }
             .forEach { shelf ->
@@ -281,10 +304,14 @@ class HomeScreen(
                     label(shelf.title, 16f).apply { setTypeface(null, Typeface.BOLD) },
                     LayoutParams(0, -2, 1f),
                 )
-                heading.addView(label("左右选剧  ·  上下切换分区", 10f, TvStyle.muted))
                 block.addView(heading)
                 val horizontal =
-                    HorizontalScrollView(context).apply {
+                    object : HorizontalScrollView(context) {
+                        override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+                            super.onScrollChanged(l, t, oldl, oldt)
+                            if (l != oldl) scheduleVisibleArtwork()
+                        }
+                    }.apply {
                         isHorizontalScrollBarEnabled = false
                         clipToPadding = false
                         setPadding(dp(2), dp(2), dp(2), dp(2))
@@ -298,10 +325,6 @@ class HomeScreen(
                 block.addView(horizontal)
                 val rowCards = mutableListOf<Card>()
                 fun addCard(entry: Entry?, moreAction: (() -> Unit)? = null) {
-                    val width =
-                        ((resources.displayMetrics.widthPixels - dp(160) - dp(56)) / 5)
-                            .toInt()
-                            .coerceAtLeast(dp(100))
                     val key =
                         if (entry != null) "${shelf.key}:${entry.series.id}"
                         else "${shelf.key}:more"
@@ -311,7 +334,7 @@ class HomeScreen(
                             id = View.generateViewId()
                             tag = key
                             isFocusable = true
-                            isFocusableInTouchMode = true
+                            isFocusableInTouchMode = false
                             setPadding(dp(4), dp(4), dp(4), dp(8))
                             background = shape(false)
                         }
@@ -324,7 +347,7 @@ class HomeScreen(
                         else null
                     view.addView(
                         image ?: label("›", 36f).apply { gravity = Gravity.CENTER },
-                        LayoutParams(-1, ((width - dp(8)) / TvStyle.POSTER_ASPECT).roundToInt()),
+                        LayoutParams(-1, posterHeight(cardWidth)),
                     )
                     val title =
                         label(entry?.series?.title ?: "查看全部", 14f).apply {
@@ -395,7 +418,7 @@ class HomeScreen(
                             lastRow = shelf.key
                         }
                     }
-                    line.addView(view, LayoutParams(width, -1).apply { rightMargin = dp(14) })
+                    line.addView(view, LayoutParams(cardWidth, -1).apply { rightMargin = spacing })
                     rowCards += card
                     cards[key] = card
                 }
@@ -416,14 +439,20 @@ class HomeScreen(
                     id = View.generateViewId()
                     tag = "home:more"
                     isFocusable = true
-                    isFocusableInTouchMode = true
+                    isFocusableInTouchMode = false
+                    minimumHeight = dp(48)
+                    gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(12), dp(12), dp(12), dp(12))
                     background = shape(false)
                     setOnFocusChangeListener { _, f ->
                         background = shape(f)
                         if (f) lastFocus = tag.toString()
                     }
-                    setOnClickListener { more() }
+                    setOnClickListener {
+                        lastFocus = tag.toString()
+                        remember(lastFocus)
+                        more()
+                    }
                 }
             contents.addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })
             footer += next
@@ -472,6 +501,7 @@ class HomeScreen(
                         .firstOrNull { row -> row.cards.any { it.view === target } }
                         ?.let { revealSelection(it) }
                 loadNearbySelection()
+                loadVisibleArtwork()
             }
         }
     }
@@ -483,6 +513,7 @@ class HomeScreen(
             restoreOffsets(position)
             restoring = false
             loadNearbySelection()
+            loadVisibleArtwork()
         }
     }
 
@@ -568,6 +599,22 @@ class HomeScreen(
         rows.getOrNull(row + 1)?.cards?.take(6)?.forEach(::requestCover)
     }
 
+    private fun scheduleVisibleArtwork() {
+        removeCallbacks(visibleArtwork)
+        postOnAnimation(visibleArtwork)
+    }
+
+    private fun loadVisibleArtwork() {
+        if (restoring) return
+        val bounds = Rect()
+        cards.values.forEach { card ->
+            val image = card.image ?: return@forEach
+            val visible = image.getLocalVisibleRect(bounds)
+            if (visible && !card.inViewport && image.drawable == null) requestCover(card)
+            card.inViewport = visible
+        }
+    }
+
     private fun requestCover(card: Card) {
         val image = card.image ?: return
         if (card.pending || card.entry?.series?.cover.isNullOrBlank()) return
@@ -618,20 +665,25 @@ class HomeScreen(
             post {
                 fitArtwork()
                 loadNearbySelection()
+                loadVisibleArtwork()
             }
     }
 
     private fun fitArtwork() {
-        rows.forEach { row ->
-            val cardWidth = row.cards.firstOrNull()?.view?.width ?: return@forEach
-            if (cardWidth <= 0) return@forEach
-            val imageHeight =
-                ((cardWidth - dp(8)).coerceAtLeast(1) / TvStyle.POSTER_ASPECT).roundToInt()
-            row.cards.forEach { card ->
-                card.view.getChildAt(0).let { artwork ->
-                    if (artwork.layoutParams.height != imageHeight)
-                        artwork.layoutParams = artwork.layoutParams.apply { height = imageHeight }
-                }
+        if (width <= 0) return
+        val cardWidth = cardWidth(width)
+        val spacing = cardSpacing(width)
+        val imageHeight = posterHeight(cardWidth)
+        cards.values.forEach { card ->
+            val params = card.view.layoutParams as LayoutParams
+            if (params.width != cardWidth || params.rightMargin != spacing) {
+                params.width = cardWidth
+                params.rightMargin = spacing
+                card.view.layoutParams = params
+            }
+            card.view.getChildAt(0).let { artwork ->
+                if (artwork.layoutParams.height != imageHeight)
+                    artwork.layoutParams = artwork.layoutParams.apply { height = imageHeight }
             }
         }
     }
