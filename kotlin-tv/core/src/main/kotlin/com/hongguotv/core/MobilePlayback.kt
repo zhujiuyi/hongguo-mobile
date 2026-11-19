@@ -65,9 +65,11 @@ internal object MobilePlayback {
             if (body.contentLength() > limit) throw IOException("播放信息过大")
             val source = body.source()
             source.request(limit + 1)
-            if (source.buffer.size > limit) throw IOException("播放信息过大")
+            val bodyBytes = source.buffer.size
+            if (bodyBytes > limit) throw IOException("播放信息过大")
             val text = source.readUtf8()
-            if (text.isBlank()) throw EmptyPlaybackResponseException("stage=mobile-model")
+            if (text.isBlank())
+                throw EmptyPlaybackResponseException("stage=mobile-model http=${response.code} bytes=$bodyBytes")
             val root = try { JSONObject(text) } catch (_: Exception) {
                 throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
             }

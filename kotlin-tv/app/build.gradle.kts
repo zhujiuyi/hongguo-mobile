@@ -28,8 +28,8 @@ android {
         if (!legacyAudio) minSdk = 23
         buildConfigField("boolean", "LEGACY_AUDIO", legacyAudio.toString())
         targetSdk = 36
-        versionCode = System.getenv("HONGGUO_MOBILE_VERSION_CODE")?.toInt() ?: 2
-        versionName = System.getenv("HONGGUO_MOBILE_VERSION_NAME") ?: "1.0.0"
+        versionCode = System.getenv("HONGGUO_MOBILE_VERSION_CODE")?.toInt() ?: 3
+        versionName = System.getenv("HONGGUO_MOBILE_VERSION_NAME") ?: "1.0.1"
     }
     // Publish explicit ARM installer choices plus a universal updater fallback.
     splits {
@@ -68,7 +68,8 @@ android {
         }
         getByName("release") {
             signingConfig = signingConfigs.getByName("delivery").takeIf { it.storeFile != null }
-            isMinifyEnabled = true
+            // The affected episode played on the same phone with R8 disabled.
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

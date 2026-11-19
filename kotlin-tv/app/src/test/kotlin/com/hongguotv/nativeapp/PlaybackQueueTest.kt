@@ -617,17 +617,32 @@ class PlaybackQueueTest {
         val text = TextView(activity)
         set(activity, "hud", LinearLayout(activity))
         set(activity, "playbackText", text)
+        set(activity, "waitingForFirstFrame", true)
+        set(activity, "playbackPreparationUntil", android.os.SystemClock.elapsedRealtime() + 20_000L)
+        val recovery = get(activity, "recovery") as RecoveryBudget
+        repeat(2) { assertTrue(recovery.consume()) }
         invoke(
             activity,
             "playerFailure",
-            PlaybackException(
-                "fixture",
-                EmptyPlaybackResponseException(),
-                PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
-            ),
+            EmptyPlaybackResponseException("stage=mobile-model http=200 bytes=0"),
         )
         assertTrue(text.text.toString().contains("播放信息接口返回空响应"))
         assertTrue(get(activity, "playError") == true)
+        val diagnostic = invoke(activity, "playbackDiagnostics").toString()
+        assertTrue(diagnostic.contains("恢复2/3"))
+        assertTrue(diagnostic.contains("http=200 bytes=0"))
+
+        val controls = get(activity, "controls") as LinearLayout
+        val episodes = (0 until controls.childCount).map(controls::getChildAt)
+            .filterIsInstance<TextView>().single { it.text == "选集" }
+        assertTrue(episodes.performClick())
+        val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+        assertTrue(dialog.isShowing)
+        assertEquals(false, get(activity, "autoRecovery"))
+        dialog.dismiss()
+        ShadowLooper.idleMainLooper()
+        assertEquals(true, get(activity, "autoRecovery"))
+        assertEquals(2, recovery.attempts)
     }
 
     @Test

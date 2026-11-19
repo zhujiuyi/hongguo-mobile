@@ -255,6 +255,8 @@ class MainActivity : Activity() {
     private var hideAutoplayOverlay = false
     private var recoveryDisplayActive = false
     private var allowSlowRecovery = false
+    private val recoveryAttemptLimit
+        get() = if (allowSlowRecovery) recovery.total else RecoveryBudget.FAST_ATTEMPTS
     private var playbackPreparationUntil = 0L
     private var recoveryAction: TextView? = null
     private var retryAutoplay = true
@@ -298,7 +300,7 @@ class MainActivity : Activity() {
             else if (recovery.consume()) {
                 android.util.Log.i(
                     "HongguoTV",
-                    "Automatic playback recovery ${recovery.attempts}/${recovery.total} at ${retryPosition}ms",
+                    "Automatic playback recovery ${recovery.attempts}/$recoveryAttemptLimit at ${retryPosition}ms",
                 )
                 autoRecoveredPlay = true
                 playEpisode(episodeIndex, retryPosition, retryAutoplay, recovering = true)
@@ -3579,7 +3581,7 @@ class MainActivity : Activity() {
                 autoplay = retryAutoplay,
                 slow = recovery.slow,
                 attempt = recovery.attempts + 1,
-                total = if (allowSlowRecovery) recovery.total else RecoveryBudget.FAST_ATTEMPTS,
+                total = recoveryAttemptLimit,
                 remainingMillis = remainingMillis,
                 positionText = formatTime(retryPosition),
             )
@@ -3625,7 +3627,7 @@ class MainActivity : Activity() {
                     appVersion = BuildConfig.VERSION_NAME,
                     failure = lastPlaybackFailure,
                     recoveryAttempts = recovery.attempts,
-                    total = recovery.total,
+                    total = recoveryAttemptLimit,
                     detail = lastPlaybackDetail,
                 )
         } catch (_: Exception) {
@@ -4172,6 +4174,10 @@ class MainActivity : Activity() {
             }
         }
         addButton(actions, "查看错误详情") { tvTools.info("播放诊断", playbackDiagnostics().trim(), currentFocus) }
+        if ((detail?.episodes?.size ?: 0) > 1) {
+            lateinit var episodes: TextView
+            episodes = addButton(controls, "选集") { showEpisodePanel(episodes) }
+        }
         if (retryable && !sleepStopped) {
             recoveryAction = addButton(controls, "停止自动重试") {
                 if (autoRecovery) {
@@ -4785,7 +4791,9 @@ class MainActivity : Activity() {
         if (episodePanel != null) { episodePanel?.dismiss(); return }
         val ticket = generation
         val overlayWasVisible = hud.visibility == View.VISIBLE
-        requestedAutoplay = player?.playWhenReady ?: requestedAutoplay
+        val resumeRecovery = playError && autoRecovery
+        if (resumeRecovery) cancelRecovery()
+        if (!playError) requestedAutoplay = player?.playWhenReady ?: requestedAutoplay
         player?.pause()
         saveProgress()
         var resumeOnClose = true
@@ -4808,10 +4816,14 @@ class MainActivity : Activity() {
                 {
                     episodePanel = null
                     if (resumeOnClose && foreground && generation == ticket && screen == "player") {
-                        if (requestedAutoplay && !sleepStopped && !pausedForLifecycle)
+                        if (!playError && requestedAutoplay && !sleepStopped && !pausedForLifecycle)
                             player?.play()
                         if (anchor.isAttachedToWindow) anchor.requestFocus()
                         if (overlayWasVisible) showHud() else hidePlaybackOverlay()
+                        if (playError && resumeRecovery) {
+                            autoRecovery = true
+                            scheduleRecovery()
+                        }
                     }
                 },
                 lastWatched =
