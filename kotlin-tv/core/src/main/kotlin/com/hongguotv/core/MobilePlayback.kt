@@ -21,10 +21,20 @@ internal fun interface MobilePlaybackSigner {
 }
 
 internal object MobilePlayback {
+    private const val USER_AGENT =
+        "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
+    val TAB_HOSTS = listOf(
+        "api5-normal-sinfonlineb.fqnovel.com",
+        "api5-normal-sinfonlinea.fqnovel.com",
+        "api5-normal-sinfonlinec.fqnovel.com",
+        "api5-normal-hl.fqnovel.com",
+        "api5-normal-lf.fqnovel.com",
+    )
+    private val BODY_HEADERS = setOf("content-type", "content-encoding", "x-ss-stub")
     private val v5Signer = Signer(mobileV5 = true)
     val signer = MobilePlaybackSigner { url, body, _ ->
         val parsed = url.toHttpUrl()
-        val values = parsed.queryParameterNames.associateWith { parsed.queryParameter(it)!! }
+        val values = parsed.queryParameterNames.associateWith { parsed.queryParameter(it).orEmpty() }
         val now = values.getValue("_rticket").toLong()
         val request = v5Signer.signPlayback(parsed.newBuilder().query(null).build().toString(), values, body, now)
         MobileSignedRequest(request.url, request.headers)
@@ -34,12 +44,7 @@ internal object MobilePlayback {
                signer: MobilePlaybackSigner, now: Long): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         RequestScope.ensureActive()
-        val query = linkedMapOf("aid" to "8662", "app_name" to "novelread",
-            "version_code" to "74332", "version_name" to "7.4.3.32",
-            "channel" to "vivo_8662_64", "device_platform" to "android",
-            "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
-            "iid" to device.getValue("iid"), "cdid" to device.getValue("cdid"),
-            "device_id" to device.getValue("device_id"), "_rticket" to now.toString())
+        val query = baseQuery(device, now)
         val url = "https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1"
             .toHttpUrl().newBuilder().apply { query.forEach { (k,v) -> addQueryParameter(k,v) } }.build()
         // TV uses platform decoders, not the official app's bytevc2 decoder.
@@ -49,7 +54,7 @@ internal object MobilePlayback {
         GZIPOutputStream(output).use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
         val bytes = output.toByteArray()
         val request = Request.Builder().url(url)
-            .header("User-Agent", "com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)")
+            .header("User-Agent", USER_AGENT)
             .header("Accept", "application/json").header("Content-Encoding", "gzip")
             .header("x-ss-stub", MessageDigest.getInstance("MD5").digest(bytes).joinToString("") { "%02X".format(it) })
         val signed = signer.sign(url.toString(), bytes, device)
@@ -59,29 +64,98 @@ internal object MobilePlayback {
         request.post(bytes.toRequestBody("application/json; charset=utf-8".toMediaType()))
         val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
         return RequestScope.execute(transport.newCall(request.build())) { response ->
-            if (!response.isSuccessful) throw PlaybackSourceException(PlaybackSourceException.Reason.HTTP_REJECTED, response.code)
-            val body = response.body ?: throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
-            val limit = 2 * 1024 * 1024L
-            if (body.contentLength() > limit) throw IOException("播放信息过大")
-            val source = body.source()
-            source.request(limit + 1)
-            val bodyBytes = source.buffer.size
-            if (bodyBytes > limit) throw IOException("播放信息过大")
-            val text = source.readUtf8()
-            if (text.isBlank())
-                throw EmptyPlaybackResponseException("stage=mobile-model http=${response.code} bytes=$bodyBytes")
-            val root = try { JSONObject(text) } catch (_: Exception) {
-                throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
-            }
-            PlaybackModels.checkStatus(root)
-            val data = root.optJSONObject("data")
-                ?: throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
-            val entries = data.optJSONObject("1004") ?: data
-            val model = PlaybackModels.objectValue(entries.optJSONObject(id)?.opt("video_model"))
-                ?: throw PlaybackSourceException(PlaybackSourceException.Reason.NO_PLAYABLE_SOURCE)
-            val rows = PlaybackModels.renditions(model)
-            if (rows.isEmpty()) throw PlaybackSourceException(PlaybackSourceException.Reason.NO_PLAYABLE_SOURCE)
-            StreamLadder(rows)
+            parseResponse(id, response, stage = "mobile-model", tabShape = false)
         }
+    }
+
+    /** 使用 v5 三头签名通过 GET video_tab 接口获取播放阶梯。 */
+    fun tabLadder(
+        id: String,
+        device: Map<String, String>,
+        host: String,
+        http: OkHttpClient,
+        signer: MobilePlaybackSigner = this.signer,
+        now: Long,
+    ): StreamLadder {
+        require(id.matches(Regex("[0-9]{1,30}")))
+        RequestScope.ensureActive()
+        val identity = baseQuery(device, now)
+        val query = linkedMapOf<String, String>().apply {
+            identity.filterKeys { it != "_rticket" }.forEach { (k, v) -> put(k, v) }
+            put("video_id", id)
+            put("video_id_type", "0")
+            put("device_level", "1")
+            put("need_all_video_definition", "1")
+            put("need_mp4_align", "0")
+            put("use_os_player", "0")
+            put("video_platform", "1024")
+            put("source", "0")
+            put("from_video_id", "")
+            put("_rticket", now.toString())
+        }
+        val url = "https://$host/reading/bookapi/video_tab/multi_video_model/v1/"
+            .toHttpUrl().newBuilder().apply { query.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
+        val signed = signer.sign(url.toString(), ByteArray(0), device)
+        val request = Request.Builder().url(signed.url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/json")
+        // 过滤任何与请求体相关的头，避免 GET 请求携带 body 摘要头被网关短路。
+        signed.headers.forEach { (k, v) ->
+            if (k.lowercase() !in BODY_HEADERS) request.header(k, v)
+        }
+        RequestScope.ensureActive()
+        request.get()
+        val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
+        return RequestScope.execute(transport.newCall(request.build())) { response ->
+            parseResponse(id, response, stage = "mobile-tab", tabShape = true)
+        }
+    }
+
+    private fun baseQuery(device: Map<String, String>, now: Long): LinkedHashMap<String, String> =
+        linkedMapOf(
+            "aid" to "8662", "app_name" to "novelread",
+            "version_code" to "74332", "version_name" to "7.4.3.32",
+            "channel" to "vivo_8662_64", "device_platform" to "android",
+            "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
+            "iid" to device.getValue("iid"), "cdid" to device.getValue("cdid"),
+            "device_id" to device.getValue("device_id"), "_rticket" to now.toString(),
+        )
+
+    private fun parseResponse(
+        id: String,
+        response: okhttp3.Response,
+        stage: String,
+        tabShape: Boolean,
+    ): StreamLadder {
+        if (!response.isSuccessful) throw PlaybackSourceException(PlaybackSourceException.Reason.HTTP_REJECTED, response.code)
+        val body = response.body ?: throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
+        val limit = 2 * 1024 * 1024L
+        if (body.contentLength() > limit) throw IOException("播放信息过大")
+        val source = body.source()
+        source.request(limit + 1)
+        val bodyBytes = source.buffer.size
+        if (bodyBytes > limit) throw IOException("播放信息过大")
+        val text = source.readUtf8()
+        if (text.isBlank()) {
+            if (!response.header("Retry-After").isNullOrBlank()) throw PlaybackServiceBackoffException()
+            throw EmptyPlaybackResponseException("stage=$stage http=${response.code} bytes=$bodyBytes")
+        }
+        val root = try { JSONObject(text) } catch (_: Exception) {
+            throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
+        }
+        PlaybackModels.checkStatus(root)
+        val data = root.optJSONObject("data")
+            ?: throw PlaybackSourceException(PlaybackSourceException.Reason.INVALID_RESPONSE)
+        val entries = if (tabShape) {
+            data.optJSONObject("video_model_data") ?: data.optJSONObject("1004") ?: data
+        } else {
+            data.optJSONObject("1004") ?: data
+        }
+        // 严格按当前集 id 提取模型，绝不回退到其他集键防止串集。
+        val model = PlaybackModels.objectValue(entries.optJSONObject(id)?.opt("video_model"))
+            ?: throw PlaybackSourceException(PlaybackSourceException.Reason.NO_PLAYABLE_SOURCE)
+        val rows = PlaybackModels.renditions(model)
+        if (rows.isEmpty()) throw PlaybackSourceException(PlaybackSourceException.Reason.NO_PLAYABLE_SOURCE)
+        return StreamLadder(rows)
     }
 }

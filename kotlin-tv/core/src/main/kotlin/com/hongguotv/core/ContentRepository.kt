@@ -156,7 +156,7 @@ class StreamLadder(val renditions: List<Rendition>) {
 class ContentHttpException(val statusCode: Int) : IOException("内容请求失败（HTTP $statusCode）")
 
 private class PlaybackModelRejectedException(val code: Int) : IOException("播放接口暂不可用（错误码 $code）")
-private class PlaybackServiceBackoffException : IOException("播放服务繁忙，请稍后重试")
+internal class PlaybackServiceBackoffException : IOException("播放服务繁忙，请稍后重试")
 
 class SearchSessionExpiredException : IOException("搜索结果已过期，请从第 1 页重新搜索")
 
@@ -177,6 +177,7 @@ internal fun playbackJson(raw: String, stage: String): JSONObject {
 
 /** 连续前台空失败的恢复阈值；全路径已知为空时，还可在本轮剩余额度内提前恢复。 */
 private const val IDENTITY_ROTATE_ROUNDS = 2
+private const val MAX_V5_ROTATIONS = 2
 
 class ContentRepository
 @JvmOverloads
@@ -974,9 +975,79 @@ constructor(
     /** v5 model requests use the same anonymous registration across foreground and prefetch. */
     fun streamLadderWithCompatibility(id: String, metadataAhead: List<String> = emptyList(), speculative: Boolean = false): StreamLadder =
         RequestScope.withDeadline(System.nanoTime() + TimeUnit.SECONDS.toNanos(if (speculative) 2 else 8)) {
-            val profile = if (speculative) playbackSession.existing()
-                ?: throw IOException("播放设备尚未就绪") else playbackSession.profile(http)
-            MobilePlayback.ladder(id, profile.values, http, MobilePlayback.signer, clock())
+            if (speculative) {
+                val profile = playbackSession.existing() ?: throw IOException("播放设备尚未就绪")
+                val preferred = profile.preferredTabHost
+                return@withDeadline if (preferred != null) {
+                    MobilePlayback.tabLadder(id, profile.values, preferred, http, MobilePlayback.signer, clock())
+                } else {
+                    MobilePlayback.ladder(id, profile.values, http, MobilePlayback.signer, clock())
+                }
+            }
+            var profile = playbackSession.profile(http)
+
+            fun probeTabHosts(
+                target: PlaybackDeviceSession.Profile,
+                hosts: List<String>,
+            ): Pair<StreamLadder?, EmptyPlaybackResponseException?> {
+                var lastEmpty: EmptyPlaybackResponseException? = null
+                for (host in hosts) {
+                    RequestScope.ensureActive()
+                    try {
+                        val ladder = MobilePlayback.tabLadder(id, target.values, host, http, MobilePlayback.signer, clock())
+                        target.preferredTabHost = host
+                        playbackSession.clearV5RotationBackoff()
+                        return ladder to null
+                    } catch (empty: EmptyPlaybackResponseException) {
+                        lastEmpty = empty
+                    }
+                }
+                return null to lastEmpty
+            }
+
+            val preferred = profile.preferredTabHost
+            if (preferred != null) {
+                try {
+                    val ladder = MobilePlayback.tabLadder(id, profile.values, preferred, http, MobilePlayback.signer, clock())
+                    playbackSession.clearV5RotationBackoff()
+                    return@withDeadline ladder
+                } catch (_: EmptyPlaybackResponseException) {
+                    // 已缓存域名失效，清除缓存后用当前身份继续探测其余域名。
+                    profile.preferredTabHost = null
+                }
+                val (recovered, _) = probeTabHosts(profile, MobilePlayback.TAB_HOSTS.filter { it != preferred })
+                if (recovered != null) return@withDeadline recovered
+            } else {
+                try {
+                    return@withDeadline MobilePlayback.ladder(id, profile.values, http, MobilePlayback.signer, clock())
+                } catch (_: EmptyPlaybackResponseException) {
+                    // 主 POST 接口返回空响应时，使用同一身份按序探测各机房 video_tab。
+                }
+                val (tabRecovered, _) = probeTabHosts(profile, MobilePlayback.TAB_HOSTS)
+                if (tabRecovered != null) return@withDeadline tabRecovered
+            }
+
+            var rotations = 0
+            if (playbackSession.canRotateV5(clock())) {
+                while (rotations < MAX_V5_ROTATIONS) {
+                    RequestScope.ensureActive()
+                    val rotated = playbackSession.rotate(http, profile)
+                    if (!rotated) {
+                        playbackSession.blockV5RotationUntil(clock() + 5_000L)
+                        break
+                    }
+                    val next = playbackSession.existing() ?: break
+                    if (next === profile) break
+                    profile = next
+                    rotations++
+                    val (rotatedResult, _) = probeTabHosts(profile, MobilePlayback.TAB_HOSTS)
+                    if (rotatedResult != null) return@withDeadline rotatedResult
+                }
+                if (rotations > 0) playbackSession.blockV5RotationUntil(clock() + 30_000L)
+            }
+            throw EmptyPlaybackResponseException(
+                "stage=mobile-tab hosts=${MobilePlayback.TAB_HOSTS.size} rot=$rotations http=200 bytes=0",
+            )
         }
 
     /** Retained legacy transport for compatibility regression coverage. */

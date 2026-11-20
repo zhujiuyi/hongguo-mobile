@@ -41,6 +41,8 @@ class PlaybackDeviceSession(
         val cookie: String,
         val routes: PlaybackRoutes = PlaybackRoutes(),
     ) {
+        // 记住当前匿名设备已验证可用的 v5 video_tab 机房域名，避免每集重复探测。
+        @Volatile var preferredTabHost: String? = null
         private var playbackSigner: Signer? = null
         private var recommendationSigner: Signer? = null
         private data class Model(val entry: org.json.JSONObject, val owner: Any, val savedAt: Long)
@@ -77,6 +79,20 @@ class PlaybackDeviceSession(
 
     private var cdid = UUID.randomUUID().toString()
     private var ready: Profile? = null
+    private var v5RotationBlockedUntil: Long = 0L
+
+    @Synchronized
+    internal fun canRotateV5(now: Long): Boolean = now >= v5RotationBlockedUntil
+
+    @Synchronized
+    internal fun blockV5RotationUntil(until: Long) {
+        if (until > v5RotationBlockedUntil) v5RotationBlockedUntil = until
+    }
+
+    @Synchronized
+    internal fun clearV5RotationBackoff() {
+        v5RotationBlockedUntil = 0L
+    }
 
     @Synchronized
     internal fun profile(http: OkHttpClient): Profile {
